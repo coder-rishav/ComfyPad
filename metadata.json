@@ -1,0 +1,6 @@
+{
+  "name": "ComfyPad",
+  "description": "A beautiful, native Android client to remotely control your ComfyUI image generation server.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
