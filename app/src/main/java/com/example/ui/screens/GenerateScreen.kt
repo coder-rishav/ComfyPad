@@ -6,6 +6,7 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -38,6 +39,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.ui.viewmodel.MainViewModel
+import com.example.ui.viewmodel.SelectedLora
+import com.example.ui.viewmodel.ModelType
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import coil.compose.AsyncImage
 import kotlin.math.roundToInt
 
 @Composable
@@ -54,6 +61,111 @@ fun KeepScreenOn() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+fun ReusableDropdown(
+    label: String,
+    selectedValue: String,
+    options: List<String>,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = modifier.fillMaxWidth()) {
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it }
+        ) {
+            OutlinedTextField(
+                value = selectedValue,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text(label) },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                )
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                if (options.isEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("None available", style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.outline)) },
+                        onClick = {},
+                        enabled = false
+                    )
+                } else {
+                    options.forEach { option ->
+                        val badge = if (label == "Checkpoint Model") {
+                            val name = option.lowercase()
+                            when {
+                                name.contains("flux") || name.contains("gguf") -> "FLUX"
+                                name.contains("turbo") || name.contains("lightning") || name.contains("hyper") -> "TURBO"
+                                name.contains("xl") || name.contains("sdxl") || name.contains("pony") || name.contains("illustrious") -> "SDXL"
+                                else -> "SD1.5"
+                            }
+                        } else null
+
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = option,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (badge != null) {
+                                        val containerColor = when (badge) {
+                                            "FLUX" -> MaterialTheme.colorScheme.primaryContainer
+                                            "SDXL" -> MaterialTheme.colorScheme.secondaryContainer
+                                            "TURBO" -> MaterialTheme.colorScheme.tertiaryContainer
+                                            else -> MaterialTheme.colorScheme.surfaceVariant
+                                        }
+                                        val textColor = when (badge) {
+                                            "FLUX" -> MaterialTheme.colorScheme.onPrimaryContainer
+                                            "SDXL" -> MaterialTheme.colorScheme.onSecondaryContainer
+                                            "TURBO" -> MaterialTheme.colorScheme.onTertiaryContainer
+                                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                        Surface(
+                                            color = containerColor,
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.padding(start = 8.dp)
+                                        ) {
+                                            Text(
+                                                text = badge,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                                color = textColor,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            onClick = {
+                                onValueChange(option)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun GenerateScreen(viewModel: MainViewModel) {
     val positivePrompt by viewModel.positivePrompt.collectAsState()
     val negativePrompt by viewModel.negativePrompt.collectAsState()
@@ -63,8 +175,24 @@ fun GenerateScreen(viewModel: MainViewModel) {
     val height by viewModel.height.collectAsState()
     val seed by viewModel.seed.collectAsState()
     val isSeedRandom by viewModel.isSeedRandom.collectAsState()
+
+    val assets by viewModel.assets.collectAsState()
+    val assetsLoading by viewModel.assetsLoading.collectAsState()
+    val assetsError by viewModel.assetsError.collectAsState()
+
+    val selectedCheckpoint by viewModel.selectedCheckpoint.collectAsState()
+    val selectedVae by viewModel.selectedVae.collectAsState()
     val sampler by viewModel.sampler.collectAsState()
-    val availableSamplers by viewModel.availableSamplers.collectAsState()
+    val selectedScheduler by viewModel.selectedScheduler.collectAsState()
+    val clipSkip by viewModel.clipSkip.collectAsState()
+    val hiresEnabled by viewModel.hiresEnabled.collectAsState()
+    val hiresUpscaler by viewModel.hiresUpscaler.collectAsState()
+    val hiresScale by viewModel.hiresScale.collectAsState()
+    val hiresSteps by viewModel.hiresSteps.collectAsState()
+    val hiresDenoise by viewModel.hiresDenoise.collectAsState()
+    val batchCount by viewModel.batchCount.collectAsState()
+    val selectedLoras by viewModel.selectedLoras.collectAsState()
+    val modelType by viewModel.modelType.collectAsState()
 
     val isGenerating by viewModel.isGenerating.collectAsState()
     val currentStep by viewModel.currentStep.collectAsState()
@@ -79,8 +207,9 @@ fun GenerateScreen(viewModel: MainViewModel) {
 
     // UI Local controls
     var negativeExp by remember { mutableStateOf(false) }
-    var showSamplerMenu by remember { mutableStateOf(false) }
+    var showAdvanced by remember { mutableStateOf(false) }
     var showHistoryDialog by remember { mutableStateOf(false) }
+    var showAddLoraMenu by remember { mutableStateOf(false) }
 
     val haptic = LocalHapticFeedback.current
     val scrollState = rememberScrollState()
@@ -144,22 +273,78 @@ fun GenerateScreen(viewModel: MainViewModel) {
                     }
                 }
 
-                IconButton(
-                    onClick = { showHistoryDialog = true },
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(50.dp))
-                        .testTag("prompt_history_icon")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.History,
-                        contentDescription = "Prompt History",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Refresh Server assets
+                    IconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            viewModel.loadAssetsFromServer()
+                        },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(50.dp))
+                    ) {
+                        if (assetsLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Refresh Options",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    // History Prompts
+                    IconButton(
+                        onClick = { showHistoryDialog = true },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(50.dp))
+                            .testTag("prompt_history_icon")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.History,
+                            contentDescription = "Prompt History",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Show connection / elements error banner if server fetch fails
+            assetsError?.let { err ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "Error info",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Server assets load issue: $err (Using cached fallback)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
 
             // Positive text prompt Card
             Card(
@@ -230,72 +415,344 @@ fun GenerateScreen(viewModel: MainViewModel) {
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            if (modelType != ModelType.FLUX) {
+                Spacer(modifier = Modifier.height(10.dp))
 
-            // Collapsible Negative Prompt
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { negativeExp = !negativeExp },
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                // Collapsible Negative Prompt
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { negativeExp = !negativeExp },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Block,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "NEGATIVE PROMPT",
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.2.sp
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                             Icon(
-                                imageVector = Icons.Default.Block,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "NEGATIVE PROMPT",
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.2.sp
-                                ),
-                                color = MaterialTheme.colorScheme.onSurface
+                                imageVector = if (negativeExp) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = "Expand collapsible",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Icon(
-                            imageVector = if (negativeExp) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            contentDescription = "Expand collapsible",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
 
-                    AnimatedVisibility(visible = negativeExp) {
-                        Column {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            OutlinedTextField(
-                                value = negativePrompt,
-                                onValueChange = { viewModel.updateNegativePrompt(it) },
-                                placeholder = { Text("What to exclude e.g. ugly, low resolution, deformed") },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(90.dp)
-                                    .testTag("negative_prompt_input"),
-                                shape = RoundedCornerShape(14.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = MaterialTheme.colorScheme.error,
-                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                        AnimatedVisibility(visible = negativeExp) {
+                            Column {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = negativePrompt,
+                                    onValueChange = { viewModel.updateNegativePrompt(it) },
+                                    placeholder = { Text("What to exclude e.g. ugly, low resolution, deformed") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(90.dp)
+                                        .testTag("negative_prompt_input"),
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = MaterialTheme.colorScheme.error,
+                                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Settings/Sliders Header
+            // PIPELINE MODEL / ASSETS SECTION
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Cyclone,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "PIPELINE MODELS",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.2.sp
+                    ),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (modelType == ModelType.FLUX) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Using Flux pipeline (Euler, Simple, Auto CLIP & VAE)",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            } else if (modelType == ModelType.TURBO) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.4f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.3f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Turbo model — low steps recommended",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Checkpoint Dropdown
+                    ReusableDropdown(
+                        label = "Checkpoint Model",
+                        selectedValue = selectedCheckpoint ?: "Standard / None selected",
+                        options = assets.checkpoints,
+                        onValueChange = { viewModel.updateSelectedCheckpoint(it) }
+                    )
+
+                    // VAE Dropdown
+                    ReusableDropdown(
+                        label = "VAE Loader",
+                        selectedValue = if (modelType == ModelType.FLUX) "ae.safetensors" else selectedVae,
+                        options = if (modelType == ModelType.FLUX) listOf("ae.safetensors") else listOf("Automatic") + assets.vaes,
+                        onValueChange = { viewModel.updateSelectedVae(it) }
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ReusableDropdown(
+                            label = "Sampler",
+                            selectedValue = if (modelType == ModelType.FLUX) "euler" else sampler,
+                            options = if (modelType == ModelType.FLUX) listOf("euler") else assets.samplers,
+                            onValueChange = { viewModel.updateSelectedSampler(it) },
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        ReusableDropdown(
+                            label = "Scheduler",
+                            selectedValue = if (modelType == ModelType.FLUX) "simple" else selectedScheduler,
+                            options = if (modelType == ModelType.FLUX) listOf("simple") else assets.schedulers,
+                            onValueChange = { viewModel.updateSelectedScheduler(it) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // LoRA MANAGEMENT PANEL
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Layers,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "ACTIVE LoRAs",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.2.sp
+                        ),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                // Add LoRA controller
+                Box {
+                    Button(
+                        onClick = { showAddLoraMenu = !showAddLoraMenu },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add LoRA", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                    }
+
+                    DropdownMenu(
+                        expanded = showAddLoraMenu,
+                        onDismissRequest = { showAddLoraMenu = false }
+                    ) {
+                        val unusedLoras = assets.loras.filter { l -> selectedLoras.none { it.name == l } }
+                        if (unusedLoras.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("No unused LoRAs", style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.outline)) },
+                                onClick = {},
+                                enabled = false
+                            )
+                        } else {
+                            unusedLoras.forEach { loraName ->
+                                DropdownMenuItem(
+                                    text = { Text(loraName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                    onClick = {
+                                        viewModel.addLora(loraName)
+                                        showAddLoraMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    if (selectedLoras.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(60.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "No active LoRAs selected.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            )
+                        }
+                    } else {
+                        selectedLoras.forEachIndexed { i, activeLora ->
+                            if (i > 0) Spacer(modifier = Modifier.height(14.dp))
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = activeLora.name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = String.format("%.2f", activeLora.strength),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        IconButton(
+                                            onClick = { viewModel.removeLora(activeLora.name) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Delete LoRA",
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Slider(
+                                    value = activeLora.strength,
+                                    onValueChange = { viewModel.updateLoraStrength(activeLora.name, it) },
+                                    valueRange = -2.0f..2.0f,
+                                    modifier = Modifier.padding(horizontal = 4.dp),
+                                    colors = SliderDefaults.colors(
+                                        activeTrackColor = MaterialTheme.colorScheme.primary,
+                                        thumbColor = MaterialTheme.colorScheme.primary
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Standard Sliders section
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Default.Tune,
@@ -314,7 +771,7 @@ fun GenerateScreen(viewModel: MainViewModel) {
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Parameter Adjustment Card
             Card(
@@ -325,6 +782,22 @@ fun GenerateScreen(viewModel: MainViewModel) {
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
                     // Steps Slider
+                    val isTurbo = modelType == ModelType.TURBO
+                    val isFlux = modelType == ModelType.FLUX
+
+                    val stepsRange = if (isTurbo) 1f..8f else 1f..50f
+                    val stepsCount = if (isTurbo) 7 else 49
+
+                    val cfgLabel = if (isFlux) "Guidance Scale" else "CFG Scale"
+                    val cfgRange = if (isFlux) 1.0f..10.0f else if (isTurbo) 1.0f..2.0f else 1.0f..20.0f
+                    val cfgSteps = if (isFlux) 90 else if (isTurbo) 10 else 190
+
+                    val sizePresets = if (isFlux || modelType == ModelType.SDXL) {
+                        listOf(Pair(1024, 1024), Pair(1152, 896), Pair(896, 1152), Pair(1216, 832))
+                    } else {
+                        listOf(Pair(512, 512), Pair(512, 768), Pair(768, 512), Pair(768, 768))
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -340,10 +813,10 @@ fun GenerateScreen(viewModel: MainViewModel) {
                         )
                     }
                     Slider(
-                        value = steps.toFloat(),
+                        value = steps.toFloat().coerceIn(stepsRange),
                         onValueChange = { viewModel.updateSteps(it.roundToInt()) },
-                        valueRange = 1f..50f,
-                        steps = 49,
+                        valueRange = stepsRange,
+                        steps = stepsCount,
                         modifier = Modifier.testTag("steps_slider"),
                         colors = SliderDefaults.colors(
                             activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -354,13 +827,13 @@ fun GenerateScreen(viewModel: MainViewModel) {
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // CFG Slider
+                    // CFG Slider / Guidance Scale
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "CFG Scale",
+                            text = cfgLabel,
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                         )
                         Text(
@@ -370,10 +843,10 @@ fun GenerateScreen(viewModel: MainViewModel) {
                         )
                     }
                     Slider(
-                        value = cfg,
+                        value = cfg.coerceIn(cfgRange),
                         onValueChange = { viewModel.updateCfg(it) },
-                        valueRange = 1.0f..20.0f,
-                        steps = 190,
+                        valueRange = cfgRange,
+                        steps = cfgSteps,
                         modifier = Modifier.testTag("cfg_slider"),
                         colors = SliderDefaults.colors(
                             activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -382,9 +855,42 @@ fun GenerateScreen(viewModel: MainViewModel) {
                         )
                     )
 
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Width & Height Sliders (512 to 2048, snapping to 64)
+                    // Size presets selection
+                    Text(
+                        text = "DIMENSIONS PRESETS",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        sizePresets.forEach { (w, h) ->
+                            val isSelected = width == w && height == h
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    viewModel.updateWidth(w)
+                                    viewModel.updateHeight(h)
+                                },
+                                label = { Text("${w}x${h}", fontSize = 11.sp) },
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Width & Height Sliders (256 to 2048, snapping to 64)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -402,10 +908,10 @@ fun GenerateScreen(viewModel: MainViewModel) {
                     Slider(
                         value = width.toFloat(),
                         onValueChange = {
-                            val roundedValue = ((it / 64).roundToInt() * 64).coerceIn(512, 2048)
+                            val roundedValue = ((it / 64).roundToInt() * 64).coerceIn(256, 2048)
                             viewModel.updateWidth(roundedValue)
                         },
-                        valueRange = 512f..2048f,
+                        valueRange = 256f..2048f,
                         modifier = Modifier.testTag("width_slider"),
                         colors = SliderDefaults.colors(
                             activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -433,10 +939,10 @@ fun GenerateScreen(viewModel: MainViewModel) {
                     Slider(
                         value = height.toFloat(),
                         onValueChange = {
-                            val roundedValue = ((it / 64).roundToInt() * 64).coerceIn(512, 2048)
+                            val roundedValue = ((it / 64).roundToInt() * 64).coerceIn(256, 2048)
                             viewModel.updateHeight(roundedValue)
                         },
-                        valueRange = 512f..2048f,
+                        valueRange = 256f..2048f,
                         modifier = Modifier.testTag("height_slider"),
                         colors = SliderDefaults.colors(
                             activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -501,43 +1007,525 @@ fun GenerateScreen(viewModel: MainViewModel) {
                             )
                         }
                     }
+                }
+            }
 
-                    Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-                    // Sampler Dropdown
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        ExposedDropdownMenuBox(
-                            expanded = showSamplerMenu,
-                            onExpandedChange = { showSamplerMenu = it }
-                        ) {
-                            OutlinedTextField(
-                                value = sampler,
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Sampler Configuration") },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showSamplerMenu) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor()
-                                    .testTag("sampler_selector"),
-                                shape = RoundedCornerShape(14.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+            // ADVANCED ACCORDION (Clip skip, batch count, hires fix toggles)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showAdvanced = !showAdvanced },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Extension,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "ADVANCED PARAMETERS",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.2.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Icon(
+                            imageVector = if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = "Expand advance panel",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    AnimatedVisibility(visible = showAdvanced) {
+                        Column(modifier = Modifier.padding(top = 16.dp)) {
+                            // Clip Skip slider (1 to 4)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Clip Skip",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                                Text(
+                                    text = "$clipSkip",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                )
+                            }
+                            Slider(
+                                value = clipSkip.toFloat(),
+                                onValueChange = { viewModel.updateClipSkip(it.roundToInt()) },
+                                valueRange = 1f..4f,
+                                steps = 2,
+                                colors = SliderDefaults.colors(
+                                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                                    thumbColor = MaterialTheme.colorScheme.primary
                                 )
                             )
 
-                            ExposedDropdownMenu(
-                                expanded = showSamplerMenu,
-                                onDismissRequest = { showSamplerMenu = false }
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Batch count slider (1 to 8)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                availableSamplers.forEach { sName ->
-                                    DropdownMenuItem(
-                                        text = { Text(sName) },
-                                        onClick = {
-                                            viewModel.updateSampler(sName)
-                                            showSamplerMenu = false
+                                Text(
+                                    text = "Batch Count",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                                Text(
+                                    text = "$batchCount",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                )
+                            }
+                            Slider(
+                                value = batchCount.toFloat(),
+                                onValueChange = { viewModel.updateBatchCount(it.roundToInt()) },
+                                valueRange = 1f..8f,
+                                steps = 6,
+                                colors = SliderDefaults.colors(
+                                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                                    thumbColor = MaterialTheme.colorScheme.primary
+                                )
+                            )
+
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            // Hires Fix Sub-panel
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "High-Resolution Fix (Hires Fix)",
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                    Text(
+                                        text = "Upscales elements with double KSampler pass",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = hiresEnabled,
+                                    onCheckedChange = { viewModel.updateHiresEnabled(it) }
+                                )
+                            }
+
+                            AnimatedVisibility(visible = hiresEnabled) {
+                                Column(modifier = Modifier.padding(top = 12.dp)) {
+                                    // Upscaler dropdown
+                                    ReusableDropdown(
+                                        label = "Latent Upscaling Method",
+                                        selectedValue = hiresUpscaler ?: "nearest-exact",
+                                        options = assets.upscaleModels.ifEmpty { listOf("nearest-exact", "bilinear", "area", "bicubic") },
+                                        onValueChange = { viewModel.updateHiresUpscaler(it) }
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    // Scale slider (1.0x to 3.0x)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Upscale Scale Factor",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                        Text(
+                                            text = String.format("%.2fx", hiresScale),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                        )
+                                    }
+                                    Slider(
+                                        value = hiresScale,
+                                        onValueChange = { viewModel.updateHiresScale(it) },
+                                        valueRange = 1.0f..3.0f,
+                                        colors = SliderDefaults.colors(
+                                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                                            thumbColor = MaterialTheme.colorScheme.primary
+                                        )
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    // Hires steps (5 to 30)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Hires Steps pass",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                        Text(
+                                            text = "$hiresSteps",
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                        )
+                                    }
+                                    Slider(
+                                        value = hiresSteps.toFloat(),
+                                        onValueChange = { viewModel.updateHiresSteps(it.roundToInt()) },
+                                        valueRange = 5f..30f,
+                                        steps = 24,
+                                        colors = SliderDefaults.colors(
+                                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                                            thumbColor = MaterialTheme.colorScheme.primary
+                                        )
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    // Denoise (0.0 to 1.0)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Denoising Strength",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                        Text(
+                                            text = String.format("%.2f", hiresDenoise),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                        )
+                                    }
+                                    Slider(
+                                        value = hiresDenoise,
+                                        onValueChange = { viewModel.updateHiresDenoise(it) },
+                                        valueRange = 0.0f..1.0f,
+                                        colors = SliderDefaults.colors(
+                                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                                            thumbColor = MaterialTheme.colorScheme.primary
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // FACE SWAP PARAMETERS ACCORDION CARD
+            Spacer(modifier = Modifier.height(16.dp))
+            var showFaceSwapPanel by remember { mutableStateOf(false) }
+            val genFaceSwapEnabled by viewModel.genFaceSwapEnabled.collectAsState()
+            val genFaceSwapSourceFaceUri by viewModel.genFaceSwapSourceFaceUri.collectAsState()
+            val genFaceSwapRestoreModel by viewModel.genFaceSwapRestoreModel.collectAsState()
+            val genFaceSwapVisibility by viewModel.genFaceSwapVisibility.collectAsState()
+            val genFaceSwapWeight by viewModel.genFaceSwapWeight.collectAsState()
+            val settingsManager = viewModel.settingsManager
+            val faceSwapEngine = settingsManager.faceSwapEngine
+
+            val launcher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.GetContent()
+            ) { uri: Uri? ->
+                if (uri != null) {
+                    viewModel.updateGenFaceSwapSourceFaceUri(uri)
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth().testTag("face_swap_card"),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showFaceSwapPanel = !showFaceSwapPanel },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Face,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "FACE SWAP PARAMETERS",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.2.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (genFaceSwapEnabled) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text(
+                                        text = "ACTIVE",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Icon(
+                            imageVector = if (showFaceSwapPanel) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = "Expand face swap panel",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    AnimatedVisibility(visible = showFaceSwapPanel) {
+                        Column {
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            // Switch to toggle ON/OFF
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Enable Face Swap Integration",
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                    )
+                                    Text(
+                                        text = "Swap source face into the generated character",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = genFaceSwapEnabled,
+                                    onCheckedChange = { viewModel.updateGenFaceSwapEnabled(it) },
+                                    modifier = Modifier.testTag("gen_face_swap_switch")
+                                )
+                            }
+
+                            if (genFaceSwapEnabled) {
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                // Source Face Selector
+                                Text(
+                                    text = "Source Target Face Image",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(80.dp)
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .background(MaterialTheme.colorScheme.surface)
+                                            .clickable { launcher.launch("image/*") }
+                                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (genFaceSwapSourceFaceUri != null) {
+                                            AsyncImage(
+                                                model = genFaceSwapSourceFaceUri,
+                                                contentDescription = "Selected Target Face Thumbnail",
+                                                modifier = Modifier.fillMaxSize(),
+                                                contentScale = ContentScale.Crop
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Default.AddPhotoAlternate,
+                                                contentDescription = "No photo selected icon",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                modifier = Modifier.size(32.dp)
+                                            )
                                         }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(16.dp))
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Button(
+                                            onClick = { launcher.launch("image/*") },
+                                            modifier = Modifier.testTag("select_source_face_button"),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Text(if (genFaceSwapSourceFaceUri != null) "Change Photo" else "Select Photo")
+                                        }
+                                        if (genFaceSwapSourceFaceUri != null) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Image loaded successfully",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                // Face Swap Engine configuration indicator
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "Swapping Pipeline Engine",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                        Text(
+                                            text = "Determined in global settings panel",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text(
+                                            text = faceSwapEngine.uppercase(),
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
+
+                                if (faceSwapEngine == "reactor") {
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                                    Spacer(modifier = Modifier.height(16.dp))
+
+                                    // Restore Model Selector
+                                    var showRestoreModelDropdown by remember { mutableStateOf(false) }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Face Restoration Model",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                        Box {
+                                            Button(
+                                                onClick = { showRestoreModelDropdown = true },
+                                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                                            ) {
+                                                Text(genFaceSwapRestoreModel.uppercase())
+                                            }
+                                            DropdownMenu(
+                                                expanded = showRestoreModelDropdown,
+                                                onDismissRequest = { showRestoreModelDropdown = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("CODEFORMER") },
+                                                    onClick = {
+                                                        viewModel.updateGenFaceSwapRestoreModel("codeformer")
+                                                        showRestoreModelDropdown = false
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("GFPGAN") },
+                                                    onClick = {
+                                                        viewModel.updateGenFaceSwapRestoreModel("gfpgan")
+                                                        showRestoreModelDropdown = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    // Face Restore Visibility Slider
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "Face Restore Visibility",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                        Text(
+                                            text = String.format("%.2f", genFaceSwapVisibility),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                        )
+                                    }
+                                    Slider(
+                                        value = genFaceSwapVisibility,
+                                        onValueChange = { viewModel.updateGenFaceSwapVisibility(it) },
+                                        valueRange = 0.0f..1.0f,
+                                        colors = SliderDefaults.colors(
+                                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                                            thumbColor = MaterialTheme.colorScheme.primary
+                                        )
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    // Codeformer Weight Slider
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "CodeFormer Weight",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                        Text(
+                                            text = String.format("%.2f", genFaceSwapWeight),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                        )
+                                    }
+                                    Slider(
+                                        value = genFaceSwapWeight,
+                                        onValueChange = { viewModel.updateGenFaceSwapWeight(it) },
+                                        valueRange = 0.0f..1.0f,
+                                        colors = SliderDefaults.colors(
+                                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                                            thumbColor = MaterialTheme.colorScheme.primary
+                                        )
                                     )
                                 }
                             }
@@ -608,7 +1596,7 @@ fun GenerateScreen(viewModel: MainViewModel) {
                                     )
                                     Spacer(modifier = Modifier.height(10.dp))
                                     Text(
-                                        text = "Awaiting live stream stream...",
+                                        text = "Awaiting live stream...",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -622,7 +1610,7 @@ fun GenerateScreen(viewModel: MainViewModel) {
                                 progress = if (totalSteps > 0) currentStep.toFloat() / totalSteps else 0f,
                                 modifier = Modifier.fillMaxWidth()
                                     .height(6.dp)
-                                    .clip(RoundedCornerShape(100.dp)),
+                                        .clip(RoundedCornerShape(100.dp)),
                                 color = MaterialTheme.colorScheme.primary,
                                 trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
                             )
@@ -792,7 +1780,7 @@ fun PromptHistoryDialog(
                             }
                         }
                     } else {
-                        if (favorites.isEmpty()) {
+                         if (favorites.isEmpty()) {
                             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 Text("No starred prompts", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }

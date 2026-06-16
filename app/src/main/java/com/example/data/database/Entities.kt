@@ -28,7 +28,11 @@ data class GeneratedImage(
     val sampler: String = "euler",
     val timestamp: Long = System.currentTimeMillis(),
     val workflowName: String? = null,
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val tag: String? = null,
+    val engineUsed: String? = null,
+    val sourceFaceThumbnail: String? = null,
+    val originalImageRef: String? = null
 )
 
 @Entity(tableName = "prompt_history")

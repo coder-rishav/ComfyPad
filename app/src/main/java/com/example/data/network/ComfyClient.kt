@@ -395,4 +395,26 @@ class ComfyClient(
             null
         }
     }
+
+    // Fetch server available embeddings
+    suspend fun getEmbeddings(): List<String> = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${getBaseUrl()}/embeddings")
+            .get()
+            .build()
+
+        try {
+            okHttpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: "[]"
+                    val array = org.json.JSONArray(body)
+                    List(array.length()) { array.getString(it) }
+                } else {
+                    emptyList()
+                }
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
 }

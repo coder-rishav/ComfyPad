@@ -277,6 +277,101 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // GLOBAL FACE SWAP SETTINGS CARD
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.Face,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "GLOBAL FACE SWAP SETTINGS",
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.2.sp
+                ),
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth().testTag("settings_face_swap_card"),
+            shape = RoundedCornerShape(24.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                
+                Text(
+                    text = "Default Face Swap Engine",
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                
+                var showEngineDropdown by remember { mutableStateOf(false) }
+                val currentEngine = settingsManager.faceSwapEngine
+                
+                Box {
+                    Button(
+                        onClick = { showEngineDropdown = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (currentEngine == "reactor") "RE-ACTOR NODE (STANDARD COMFYUI)" else "FACEFUSION REST API (EXTERNAL POST-PROCESSING)")
+                    }
+                    DropdownMenu(
+                        expanded = showEngineDropdown,
+                        onDismissRequest = { showEngineDropdown = false },
+                        modifier = Modifier.fillMaxWidth(0.9f)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("ReActor Node (Standard ComfyUI Workflow)") },
+                            onClick = {
+                                settingsManager.faceSwapEngine = "reactor"
+                                showEngineDropdown = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("FaceFusion REST API (External Server)") },
+                            onClick = {
+                                settingsManager.faceSwapEngine = "facefusion"
+                                showEngineDropdown = false
+                            }
+                        )
+                    }
+                }
+                
+                if (currentEngine == "facefusion") {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    var facefusionUrlStr by remember { mutableStateOf(settingsManager.faceFusionUrl) }
+                    
+                    OutlinedTextField(
+                        value = facefusionUrlStr,
+                        onValueChange = {
+                            facefusionUrlStr = it
+                            settingsManager.faceFusionUrl = it.trim()
+                        },
+                        label = { Text("FaceFusion REST API URL", style = MaterialTheme.typography.labelMedium) },
+                        placeholder = { Text("e.g. http://192.168.1.100:7860") },
+                        leadingIcon = { Icon(Icons.Default.Link, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                        modifier = Modifier.fillMaxWidth().testTag("settings_facefusion_url"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                        )
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         // 3. Style & Preferences Cards
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(

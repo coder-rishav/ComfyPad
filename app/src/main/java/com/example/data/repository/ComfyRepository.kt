@@ -15,6 +15,7 @@ import com.example.data.network.GenerationStatus
 import com.example.data.settings.SettingsManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -141,6 +142,22 @@ class ComfyRepository(
                         width = inputs.optInt("width", width)
                         height = inputs.optInt("height", height)
                     }
+                    "EmptySD3LatentImage" -> {
+                        width = inputs.optInt("width", width)
+                        height = inputs.optInt("height", height)
+                    }
+                    "RandomNoise" -> {
+                        seed = inputs.optLong("noise_seed", seed)
+                    }
+                    "BasicScheduler" -> {
+                        steps = inputs.optInt("steps", steps)
+                    }
+                    "FluxGuidance" -> {
+                        cfg = inputs.optDouble("guidance", cfg.toDouble()).toFloat()
+                    }
+                    "KSamplerSelect" -> {
+                        sampler = inputs.optString("sampler_name", sampler)
+                    }
                     "CLIPTextEncode" -> {
                         val text = inputs.optString("text")
                         // Heuristically separate positive vs negative by finding mentions or matching KSampler connectors if we could.
@@ -171,6 +188,137 @@ class ComfyRepository(
         val sampler: String = "euler"
     )
 
+    private suspend fun executeFaceFusionSwap(
+        sourceUri: Uri,
+        targetUri: Uri
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        val client = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+            
+        val faceFusionHost = settingsManager.faceFusionUrl
+        
+        try {
+            // Upload Source
+            val sourceBytes = try {
+                context.contentResolver.openInputStream(sourceUri)?.use { it.readBytes() }
+            } catch (e: Exception) { null } ?: return@withContext null
+            
+            val sourceBody = okhttp3.MultipartBody.Builder()
+                .setType(okhttp3.MultipartBody.FORM)
+                .addFormDataPart(
+                    "file",
+                    "source.png",
+                    okhttp3.RequestBody.create("image/png".toMediaTypeOrNull(), sourceBytes)
+                )
+                .build()
+                
+            val sourceReq = okhttp3.Request.Builder()
+                .url("$faceFusionHost/image/upload")
+                .post(sourceBody)
+                .build()
+                
+            val sourceName = client.newCall(sourceReq).execute().use { r ->
+                if (!r.isSuccessful) return@withContext null
+                org.json.JSONObject(r.body?.string() ?: "").getString("filename")
+            }
+            
+            // Upload Target
+            val targetBytes = try {
+                context.contentResolver.openInputStream(targetUri)?.use { it.readBytes() }
+            } catch (e: Exception) { null } ?: return@withContext null
+            
+            val targetBody = okhttp3.MultipartBody.Builder()
+                .setType(okhttp3.MultipartBody.FORM)
+                .addFormDataPart(
+                    "file",
+                    "target.png",
+                    okhttp3.RequestBody.create("image/png".toMediaTypeOrNull(), targetBytes)
+                )
+                .build()
+                
+            val targetReq = okhttp3.Request.Builder()
+                .url("$faceFusionHost/image/upload")
+                .post(targetBody)
+                .build()
+                
+            val targetName = client.newCall(targetReq).execute().use { r ->
+                if (!r.isSuccessful) return@withContext null
+                org.json.JSONObject(r.body?.string() ?: "").getString("filename")
+            }
+            
+            // Create Job
+            val jobJson = org.json.JSONObject()
+            jobJson.put("source_paths", org.json.JSONArray().apply { put(sourceName) })
+            jobJson.put("target_path", targetName)
+            jobJson.put("face_selector_mode", "reference")
+            jobJson.put("reference_face_distance", 0.6)
+            jobJson.put("face_enhancer_model", "none")
+            jobJson.put("output_image_quality", 80)
+            
+            val jobReq = okhttp3.Request.Builder()
+                .url("$faceFusionHost/job/create")
+                .post(okhttp3.RequestBody.create("application/json".toMediaTypeOrNull(), jobJson.toString()))
+                .build()
+                
+            val jobId = client.newCall(jobReq).execute().use { r ->
+                if (!r.isSuccessful) return@withContext null
+                org.json.JSONObject(r.body?.string() ?: "").getString("job_id")
+            }
+            
+            // Poll Status
+            var completed = false
+            var attempts = 0
+            var outputFilename = ""
+            while (!completed && attempts < 60) {
+                attempts++
+                delay(1500)
+                val pollReq = okhttp3.Request.Builder()
+                    .url("$faceFusionHost/job/get?job_id=$jobId")
+                    .get()
+                    .build()
+                    
+                client.newCall(pollReq).execute().use { r ->
+                    if (r.isSuccessful) {
+                        val json = org.json.JSONObject(r.body?.string() ?: "")
+                        val status = json.optString("status", "")
+                        if (status == "completed") {
+                            completed = true
+                            outputFilename = json.optString("output_path", "")
+                            if (outputFilename.isEmpty()) {
+                                outputFilename = json.optString("filename", "")
+                            }
+                        } else if (status == "failed") {
+                            attempts = 60
+                        }
+                    }
+                }
+            }
+            
+            if (!completed) return@withContext null
+            
+            // Download Swapped
+            val downloadUrl = if (outputFilename.startsWith("http")) {
+                outputFilename
+            } else {
+                "$faceFusionHost/image/download?filename=$outputFilename"
+            }
+            
+            val downloadReq = okhttp3.Request.Builder()
+                .url(downloadUrl)
+                .get()
+                .build()
+                
+            client.newCall(downloadReq).execute().use { r ->
+                if (r.isSuccessful) r.body?.bytes() else null
+            }
+        } catch (e: Exception) {
+            Log.e("ComfyRepo", "Error swapping faces in FaceFusion intercept", e)
+            null
+        }
+    }
+
     private suspend fun downloadAndStoreImage(
         filename: String,
         subfolder: String,
@@ -193,6 +341,42 @@ class ComfyRepository(
         val fileBytes = stream.readBytes()
         stream.close()
 
+        var finalBytes = fileBytes
+        var tagToStore: String? = null
+        var engineToStore: String? = null
+        var sourceFaceThumbToStore: String? = null
+        var originalRefToStore: String? = null
+
+        // Detect if standard generating face swap is applied (ReActor or FaceFusion)
+        val faceSwapActive = settingsManager.genFaceSwapEnabled
+        val sourceFaceUriStr = settingsManager.genFaceSwapSourceFaceUri
+        
+        if (faceSwapActive && sourceFaceUriStr.isNotEmpty()) {
+            val engine = settingsManager.faceSwapEngine
+            tagToStore = "face_swap"
+            engineToStore = if (engine == "reactor") "ReActor" else "FaceFusion"
+            sourceFaceThumbToStore = sourceFaceUriStr
+            originalRefToStore = filename
+
+            if (engine == "facefusion") {
+                try {
+                    val tempTargetFile = File(context.cacheDir, "temp_target_${System.currentTimeMillis()}.png")
+                    FileOutputStream(tempTargetFile).use { it.write(fileBytes) }
+                    
+                    val swapped = executeFaceFusionSwap(
+                        sourceUri = Uri.parse(sourceFaceUriStr),
+                        targetUri = Uri.fromFile(tempTargetFile)
+                    )
+                    if (swapped != null) {
+                        finalBytes = swapped
+                    }
+                    if (tempTargetFile.exists()) tempTargetFile.delete()
+                } catch (e: Exception) {
+                    Log.e(TAG, "FaceFusion intercept exception", e)
+                }
+            }
+        }
+
         // 1. Save to app-specific internal directory
         val appFolder = File(context.filesDir, "generated_images")
         if (!appFolder.exists()) {
@@ -202,14 +386,14 @@ class ComfyRepository(
         val uniqueFilename = "comfypad_${System.currentTimeMillis()}_$filename"
         val internalFile = File(appFolder, uniqueFilename)
         FileOutputStream(internalFile).use { fos ->
-            fos.write(fileBytes)
+            fos.write(finalBytes)
         }
 
         var galleryUriStr: String? = null
 
         // 2. Save optionally to device gallery via MediaStore
         if (settingsManager.saveToGallery) {
-            galleryUriStr = saveToGallery(fileBytes, uniqueFilename)
+            galleryUriStr = saveToGallery(finalBytes, uniqueFilename)
         }
 
         // 3. Put in local database
@@ -224,7 +408,11 @@ class ComfyRepository(
             height = height,
             seed = seed,
             sampler = sampler,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            tag = tagToStore,
+            engineUsed = engineToStore,
+            sourceFaceThumbnail = sourceFaceThumbToStore,
+            originalImageRef = originalRefToStore
         )
 
         val id = imageDao.insertImage(generatedImage)

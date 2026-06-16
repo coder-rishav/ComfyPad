@@ -20,6 +20,44 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
+import java.io.File
+
+data class SelectedLora(
+    val name: String,
+    val strength: Float
+)
+
+enum class ModelType {
+    FLUX, SDXL, TURBO, SD15
+}
+
+enum class UnifiedModelType {
+    GGUF, FLUX, SDXL, SD15
+}
+
+enum class FluxType {
+    DEV, SCHNELL
+}
+
+data class ComfyModel(
+    val name: String,
+    val type: UnifiedModelType
+)
+
+data class ComfyAssets(
+    val checkpoints: List<String> = emptyList(),
+    val loras: List<String> = emptyList(),
+    val vaes: List<String> = emptyList(),
+    val samplers: List<String> = emptyList(),
+    val schedulers: List<String> = emptyList(),
+    val controlNets: List<String> = emptyList(),
+    val upscaleModels: List<String> = emptyList(),
+    val embeddings: List<String> = emptyList(),
+    val fluxSafetensors: List<String> = emptyList(),
+    val fluxGgufs: List<String> = emptyList(),
+    val clips: List<String> = emptyList()
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val TAG = "MainViewModel"
     private val context = application.applicationContext
@@ -29,6 +67,131 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val database = AppDatabase.getDatabase(context)
     val comfyClient = ComfyClient(settingsManager, viewModelScope)
     val repository = ComfyRepository(context, comfyClient, database, settingsManager, viewModelScope)
+
+    // Dynamic assets cache states
+    private val _assetsLoading = MutableStateFlow(false)
+    val assetsLoading = _assetsLoading.asStateFlow()
+
+    private val _assetsError = MutableStateFlow<String?>(null)
+    val assetsError = _assetsError.asStateFlow()
+
+    private val _assets = MutableStateFlow(ComfyAssets())
+    val assets = _assets.asStateFlow()
+
+    // Persistent Selection states
+    private val _selectedCheckpoint = MutableStateFlow<String?>(settingsManager.selectedCheckpoint)
+    val selectedCheckpoint = _selectedCheckpoint.asStateFlow()
+
+    private val _selectedClip1 = MutableStateFlow(settingsManager.selectedClip1)
+    val selectedClip1 = _selectedClip1.asStateFlow()
+
+    private val _selectedClip2 = MutableStateFlow(settingsManager.selectedClip2)
+    val selectedClip2 = _selectedClip2.asStateFlow()
+
+    val modelType: StateFlow<ModelType> = _selectedCheckpoint
+        .map { checkpoint ->
+            val name = checkpoint?.lowercase() ?: ""
+            when {
+                name.contains("flux") || name.contains("gguf") -> ModelType.FLUX
+                name.contains("turbo") || name.contains("lightning") || name.contains("hyper") -> ModelType.TURBO
+                name.contains("xl") || name.contains("sdxl") || name.contains("pony") || name.contains("illustrious") -> ModelType.SDXL
+                else -> ModelType.SD15
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ModelType.SD15)
+
+    // Sub-type for Flux (DEV or SCHNELL)
+    val fluxType: StateFlow<FluxType> = _selectedCheckpoint
+        .map { checkpoint ->
+            val name = checkpoint?.lowercase() ?: ""
+            if (name.contains("schnell")) FluxType.SCHNELL else FluxType.DEV
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, FluxType.DEV)
+
+    val unifiedModels: StateFlow<List<ComfyModel>> = _assets
+        .map { assets_inst ->
+            val list = mutableListOf<ComfyModel>()
+            
+            // UnetLoaderGGUF options
+            assets_inst.fluxGgufs.forEach { name ->
+                list.add(ComfyModel(name, UnifiedModelType.GGUF))
+            }
+            
+            // UNETLoader options
+            assets_inst.fluxSafetensors.forEach { name ->
+                list.add(ComfyModel(name, UnifiedModelType.FLUX))
+            }
+            
+            // CheckpointLoaderSimple options
+            assets_inst.checkpoints.forEach { name ->
+                val lower = name.lowercase()
+                when {
+                    lower.contains("flux") -> list.add(ComfyModel(name, UnifiedModelType.FLUX))
+                    lower.contains("xl") || lower.contains("sdxl") || lower.contains("pony") || lower.contains("illustrious") -> {
+                        list.add(ComfyModel(name, UnifiedModelType.SDXL))
+                    }
+                    else -> list.add(ComfyModel(name, UnifiedModelType.SD15))
+                }
+            }
+            
+            list.distinctBy { it.name }.sortedBy { it.name }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    fun getSelectedModelType(): UnifiedModelType {
+        val current = _selectedCheckpoint.value ?: ""
+        val models = unifiedModels.value
+        val found = models.find { it.name == current }
+        if (found != null) return found.type
+        
+        val lower = current.lowercase()
+        return when {
+            lower.endsWith(".gguf") || lower.contains("gguf") -> UnifiedModelType.GGUF
+            lower.contains("flux") -> UnifiedModelType.FLUX
+            lower.contains("xl") || lower.contains("sdxl") || lower.contains("pony") || lower.contains("illustrious") -> UnifiedModelType.SDXL
+            else -> UnifiedModelType.SD15
+        }
+    }
+
+    fun updateSelectedClip1(clip: String) {
+        _selectedClip1.value = clip
+        settingsManager.selectedClip1 = clip
+    }
+
+    fun updateSelectedClip2(clip: String) {
+        _selectedClip2.value = clip
+        settingsManager.selectedClip2 = clip
+    }
+
+    private val _selectedVae = MutableStateFlow(settingsManager.selectedVae)
+    val selectedVae = _selectedVae.asStateFlow()
+
+    private val _selectedScheduler = MutableStateFlow(settingsManager.selectedScheduler)
+    val selectedScheduler = _selectedScheduler.asStateFlow()
+
+    private val _clipSkip = MutableStateFlow(settingsManager.clipSkip)
+    val clipSkip = _clipSkip.asStateFlow()
+
+    private val _hiresEnabled = MutableStateFlow(settingsManager.hiresEnabled)
+    val hiresEnabled = _hiresEnabled.asStateFlow()
+
+    private val _hiresUpscaler = MutableStateFlow<String?>(settingsManager.hiresUpscaler)
+    val hiresUpscaler = _hiresUpscaler.asStateFlow()
+
+    private val _hiresScale = MutableStateFlow(settingsManager.hiresScale)
+    val hiresScale = _hiresScale.asStateFlow()
+
+    private val _hiresSteps = MutableStateFlow(settingsManager.hiresSteps)
+    val hiresSteps = _hiresSteps.asStateFlow()
+
+    private val _hiresDenoise = MutableStateFlow(settingsManager.hiresDenoise)
+    val hiresDenoise = _hiresDenoise.asStateFlow()
+
+    private val _batchCount = MutableStateFlow(settingsManager.batchCount)
+    val batchCount = _batchCount.asStateFlow()
+
+    private val _selectedLoras = MutableStateFlow<List<SelectedLora>>(emptyList())
+    val selectedLoras = _selectedLoras.asStateFlow()
 
     // Current State Flow Inputs
     private val _positivePrompt = MutableStateFlow("")
@@ -55,7 +218,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSeedRandom = MutableStateFlow(true)
     val isSeedRandom = _isSeedRandom.asStateFlow()
 
-    private val _sampler = MutableStateFlow("euler")
+    private val _sampler = MutableStateFlow(settingsManager.selectedSampler)
     val sampler = _sampler.asStateFlow()
 
     // Server object lists (for dropdowns)
@@ -80,6 +243,93 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _galleryFilterWorkflow = MutableStateFlow<String?>(null)
     val galleryFilterWorkflow = _galleryFilterWorkflow.asStateFlow()
+
+    // Generation-tab Face Swap persistent options from SettingsManager
+    private val _genFaceSwapEnabled = MutableStateFlow(settingsManager.genFaceSwapEnabled)
+    val genFaceSwapEnabled = _genFaceSwapEnabled.asStateFlow()
+
+    private val _genFaceSwapSourceFaceUri = MutableStateFlow<Uri?>(
+        if (settingsManager.genFaceSwapSourceFaceUri.isNotEmpty()) Uri.parse(settingsManager.genFaceSwapSourceFaceUri) else null
+    )
+    val genFaceSwapSourceFaceUri = _genFaceSwapSourceFaceUri.asStateFlow()
+
+    private val _genFaceSwapRestoreModel = MutableStateFlow(settingsManager.genFaceSwapRestoreModel)
+    val genFaceSwapRestoreModel = _genFaceSwapRestoreModel.asStateFlow()
+
+    private val _genFaceSwapVisibility = MutableStateFlow(settingsManager.genFaceSwapVisibility)
+    val genFaceSwapVisibility = _genFaceSwapVisibility.asStateFlow()
+
+    private val _genFaceSwapWeight = MutableStateFlow(settingsManager.genFaceSwapWeight)
+    val genFaceSwapWeight = _genFaceSwapWeight.asStateFlow()
+
+    fun updateGenFaceSwapEnabled(enabled: Boolean) {
+        _genFaceSwapEnabled.value = enabled
+        settingsManager.genFaceSwapEnabled = enabled
+    }
+
+    fun updateGenFaceSwapSourceFaceUri(uri: Uri?) {
+        _genFaceSwapSourceFaceUri.value = uri
+        settingsManager.genFaceSwapSourceFaceUri = uri?.toString() ?: ""
+    }
+
+    fun updateGenFaceSwapRestoreModel(model: String) {
+        _genFaceSwapRestoreModel.value = model
+        settingsManager.genFaceSwapRestoreModel = model
+    }
+
+    fun updateGenFaceSwapVisibility(v: Float) {
+        _genFaceSwapVisibility.value = v
+        settingsManager.genFaceSwapVisibility = v
+    }
+
+    fun updateGenFaceSwapWeight(w: Float) {
+        _genFaceSwapWeight.value = w
+        settingsManager.genFaceSwapWeight = w
+    }
+
+    // Dedicated-tab Face Swap states (run locally / temporarily)
+    private val _dediFaceSwapSourceUri = MutableStateFlow<Uri?>(null)
+    val dediFaceSwapSourceUri = _dediFaceSwapSourceUri.asStateFlow()
+
+    private val _dediFaceSwapTargetUri = MutableStateFlow<Uri?>(null)
+    val dediFaceSwapTargetUri = _dediFaceSwapTargetUri.asStateFlow()
+
+    fun updateDediFaceSwapSourceUri(uri: Uri?) {
+        _dediFaceSwapSourceUri.value = uri
+    }
+
+    fun updateDediFaceSwapTargetUri(uri: Uri?) {
+        _dediFaceSwapTargetUri.value = uri
+    }
+
+    // Dedicated Tab - FaceFusion configurations
+    private val _facefusionMode = MutableStateFlow("reference")
+    val facefusionMode = _facefusionMode.asStateFlow()
+
+    private val _facefusionDistance = MutableStateFlow(0.6f)
+    val facefusionDistance = _facefusionDistance.asStateFlow()
+
+    private val _facefusionEnhancer = MutableStateFlow("none")
+    val facefusionEnhancer = _facefusionEnhancer.asStateFlow()
+
+    private val _facefusionQuality = MutableStateFlow(80)
+    val facefusionQuality = _facefusionQuality.asStateFlow()
+
+    fun updateFaceFusionMode(m: String) {
+        _facefusionMode.value = m
+    }
+
+    fun updateFaceFusionDistance(d: Float) {
+        _facefusionDistance.value = d
+    }
+
+    fun updateFaceFusionEnhancer(e: String) {
+        _facefusionEnhancer.value = e
+    }
+
+    fun updateFaceFusionQuality(q: Int) {
+        _facefusionQuality.value = q
+    }
 
     private val _selectedGalleryImages = MutableStateFlow<Set<GeneratedImage>>(emptySet())
     val selectedGalleryImages = _selectedGalleryImages.asStateFlow()
@@ -177,10 +427,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _width.value = settingsManager.defaultWidth
         _height.value = settingsManager.defaultHeight
 
+        // Parse saved LoRAs from preference
+        try {
+            val jsonArr = org.json.JSONArray(settingsManager.selectedLorasJson)
+            val loraList = mutableListOf<SelectedLora>()
+            for (i in 0 until jsonArr.length()) {
+                val obj = jsonArr.getJSONObject(i)
+                loraList.add(SelectedLora(obj.getString("name"), obj.optDouble("strength", 0.8).toFloat()))
+            }
+            _selectedLoras.value = loraList
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing saved loras", e)
+        }
+
+        // Load offline cached assets first
+        _assets.value = loadAssetsCache()
+
         // Connect automatically if server is configured
         if (settingsManager.serverIp.isNotEmpty()) {
             comfyClient.connectWebSocket()
-            fetchSamplers()
+            loadAssetsFromServer()
         }
 
         // Initialize default presets in db if empty
@@ -203,7 +469,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         settingsManager.serverIp = ip
         settingsManager.serverPort = port
         comfyClient.connectWebSocket()
-        fetchSamplers()
+        loadAssetsFromServer()
     }
 
     fun testConnection() {
@@ -217,33 +483,724 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun fetchSamplers() {
-        viewModelScope.launch {
-            try {
-                val info = comfyClient.getObjectInfo()
-                if (info != null) {
-                    val ksamplerObj = info.optJSONObject("KSampler")
-                    val inputObj = ksamplerObj?.optJSONObject("input")
-                    val requiredObj = inputObj?.optJSONObject("required")
-                    val samplerNameArray = requiredObj?.optJSONArray("sampler_name")
-                    if (samplerNameArray != null && samplerNameArray.optJSONArray(0) != null) {
-                        val firstInner = samplerNameArray.getJSONArray(0)
-                        val samplerList = mutableListOf<String>()
-                        for (i in 0 until firstInner.length()) {
-                            samplerList.add(firstInner.getString(i))
-                        }
-                        _availableSamplers.value = samplerList
-                    } else if (samplerNameArray != null) {
-                        val samplerList = mutableListOf<String>()
-                        for (i in 0 until samplerNameArray.length()) {
-                            samplerList.add(samplerNameArray.getString(i))
-                        }
-                        _availableSamplers.value = samplerList
-                    }
+        loadAssetsFromServer()
+    }
+
+    private fun parseComboOptions(array: org.json.JSONArray?): List<String> {
+        if (array == null) return emptyList()
+        val list = mutableListOf<String>()
+        for (i in 0 until array.length()) {
+            val item = array.opt(i)
+            if (item is org.json.JSONArray) {
+                for (j in 0 until item.length()) {
+                    list.add(item.getString(j))
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error fetching samplers from server info", e)
+                if (list.isNotEmpty()) return list
             }
         }
+        if (list.isEmpty()) {
+            for (i in 0 until array.length()) {
+                val s = array.optString(i)
+                if (s != "combo" && s.isNotEmpty()) {
+                    list.add(s)
+                }
+            }
+        }
+        return list
+    }
+
+    private fun extractOptions(objectInfo: org.json.JSONObject, nodeType: String, fieldName: String): List<String> {
+        val nodeObj = objectInfo.optJSONObject(nodeType) ?: return emptyList()
+        val inputObj = nodeObj.optJSONObject("input") ?: return emptyList()
+        val requiredObj = inputObj.optJSONObject("required") ?: inputObj
+        val fieldArray = requiredObj?.optJSONArray(fieldName) ?: return emptyList()
+        return parseComboOptions(fieldArray)
+    }
+
+    private fun loadAssetsCache(): ComfyAssets {
+        val json = settingsManager.assetsCacheJson
+        if (json.isEmpty()) return ComfyAssets()
+        return try {
+            val obj = org.json.JSONObject(json)
+            fun getList(key: String): List<String> {
+                val arr = obj.optJSONArray(key) ?: return emptyList()
+                return List(arr.length()) { arr.getString(it) }
+            }
+            ComfyAssets(
+                checkpoints = getList("checkpoints"),
+                loras = getList("loras"),
+                vaes = getList("vaes"),
+                samplers = getList("samplers"),
+                schedulers = getList("schedulers"),
+                controlNets = getList("controlNets"),
+                upscaleModels = getList("upscaleModels"),
+                embeddings = getList("embeddings"),
+                fluxSafetensors = getList("fluxSafetensors"),
+                fluxGgufs = getList("fluxGgufs"),
+                clips = getList("clips")
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading cached assets", e)
+            ComfyAssets()
+        }
+    }
+
+    private fun saveAssetsCache(assets: ComfyAssets) {
+        try {
+            val obj = org.json.JSONObject()
+            fun putList(key: String, list: List<String>) {
+                val arr = org.json.JSONArray(list)
+                obj.put(key, arr)
+            }
+            putList("checkpoints", assets.checkpoints)
+            putList("loras", assets.loras)
+            putList("vaes", assets.vaes)
+            putList("samplers", assets.samplers)
+            putList("schedulers", assets.schedulers)
+            putList("controlNets", assets.controlNets)
+            putList("upscaleModels", assets.upscaleModels)
+            putList("embeddings", assets.embeddings)
+            putList("fluxSafetensors", assets.fluxSafetensors)
+            putList("fluxGgufs", assets.fluxGgufs)
+            putList("clips", assets.clips)
+            settingsManager.assetsCacheJson = obj.toString()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving assets cache", e)
+        }
+    }
+
+    fun loadAssetsFromServer() {
+        viewModelScope.launch {
+            _assetsLoading.value = true
+            _assetsError.value = null
+            try {
+                val info = comfyClient.getObjectInfo()
+                if (info == null) {
+                    _assetsError.value = "Failed to retrieve options from server"
+                    _assetsLoading.value = false
+                    return@launch
+                }
+                val embeds = comfyClient.getEmbeddings()
+
+                val ckpts = extractOptions(info, "CheckpointLoaderSimple", "ckpt_name").ifEmpty {
+                    extractOptions(info, "CheckpointLoader", "ckpt_name")
+                }
+                
+                // LoRAs from both loaders
+                val loras1 = extractOptions(info, "LoraLoader", "lora_name")
+                val loras2 = extractOptions(info, "LoraLoaderModelOnly", "lora_name")
+                val loras = (loras1 + loras2).distinct().sorted()
+
+                val vaes = extractOptions(info, "VAELoader", "vae_name")
+                val samps = extractOptions(info, "KSampler", "sampler_name")
+                val scheds = extractOptions(info, "KSampler", "scheduler")
+                val cnets = extractOptions(info, "ControlNetLoader", "control_net_name")
+                val upscales = extractOptions(info, "UpscaleModelLoader", "model_name")
+
+                // Flux-specific models
+                val fluxSafetensors = extractOptions(info, "UNETLoader", "unet_name")
+                val fluxGgufs = extractOptions(info, "UnetLoaderGGUF", "unet_name")
+
+                // CLIP models (CLIPLoader or DualCLIPLoader)
+                val clips1 = extractOptions(info, "CLIPLoader", "clip_name")
+                val clips2 = extractOptions(info, "DualCLIPLoader", "clip_name1")
+                val clips = (clips1 + clips2).distinct().sorted()
+
+                val newAssets = ComfyAssets(
+                    checkpoints = ckpts.sorted(),
+                    loras = loras,
+                    vaes = vaes.sorted(),
+                    samplers = samps.sorted(),
+                    schedulers = scheds.sorted(),
+                    controlNets = cnets.sorted(),
+                    upscaleModels = upscales.sorted(),
+                    embeddings = embeds.sorted(),
+                    fluxSafetensors = fluxSafetensors.sorted(),
+                    fluxGgufs = fluxGgufs.sorted(),
+                    clips = clips
+                )
+
+                _assets.value = newAssets
+                saveAssetsCache(newAssets)
+
+                // Populate old fields as well
+                _availableSamplers.value = samps
+
+                if (_selectedCheckpoint.value == null && ckpts.isNotEmpty()) {
+                    updateSelectedCheckpoint(ckpts[0])
+                }
+                if (_hiresUpscaler.value == null && upscales.isNotEmpty()) {
+                    updateHiresUpscaler(upscales[0])
+                }
+
+                _assetsError.value = null
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching elements", e)
+                _assetsError.value = e.message ?: "Unknown server asset loading error"
+            } finally {
+                _assetsLoading.value = false
+            }
+        }
+    }
+
+    fun updateSelectedCheckpoint(ckpt: String?) {
+        _selectedCheckpoint.value = ckpt
+        settingsManager.selectedCheckpoint = ckpt
+        applyDefaultsForCheckpoint(ckpt)
+    }
+
+    fun applyDefaultsForCheckpoint(ckpt: String?) {
+        val name = ckpt?.lowercase() ?: ""
+        when {
+            name.contains("flux") || name.contains("gguf") -> {
+                val isSchnell = name.contains("schnell")
+                _cfg.value = if (isSchnell) 1.0f else 3.5f
+                _steps.value = if (isSchnell) 4 else 20
+                _width.value = 1024
+                _height.value = 1024
+                _sampler.value = "euler"
+                _selectedScheduler.value = "simple"
+                _clipSkip.value = 1
+
+                val asts = _assets.value
+                val possibleClips = asts.clips
+                if (possibleClips.isNotEmpty()) {
+                    val defaultClip1 = possibleClips.find { it.lowercase().contains("t5xxl") }
+                        ?: possibleClips.find { it.lowercase().contains("t5") }
+                        ?: possibleClips[0]
+                    val defaultClip2 = possibleClips.find { it.lowercase().contains("clip_l") }
+                        ?: possibleClips.find { it.lowercase().contains("clip") }
+                        ?: possibleClips[0]
+                    updateSelectedClip1(defaultClip1)
+                    updateSelectedClip2(defaultClip2)
+                }
+
+                if (asts.vaes.contains("ae.safetensors")) {
+                    updateSelectedVae("ae.safetensors")
+                } else if (asts.vaes.contains("ae")) {
+                    updateSelectedVae(asts.vaes.find { it.lowercase().contains("ae") }!!)
+                } else if (asts.vaes.isNotEmpty()) {
+                    updateSelectedVae(asts.vaes[0])
+                } else {
+                    updateSelectedVae("ae.safetensors")
+                }
+            }
+            name.contains("turbo") || name.contains("lightning") || name.contains("hyper") -> {
+                _cfg.value = 1.0f
+                _steps.value = 4
+                _selectedScheduler.value = "sgm_uniform"
+            }
+            name.contains("xl") || name.contains("sdxl") || name.contains("pony") || name.contains("illustrious") -> {
+                _cfg.value = 7.0f
+                _steps.value = 25
+                _width.value = 1024
+                _height.value = 1024
+                _sampler.value = "dpmpp_2m"
+                _selectedScheduler.value = "karras"
+                _clipSkip.value = 2
+            }
+            else -> {
+                _cfg.value = 7.0f
+                _steps.value = 20
+                _width.value = 512
+                _height.value = 512
+                _sampler.value = "euler"
+                _selectedScheduler.value = "karras"
+                _clipSkip.value = 1
+            }
+        }
+    }
+
+    fun updateSelectedVae(vae: String) {
+        _selectedVae.value = vae
+        settingsManager.selectedVae = vae
+    }
+
+    fun updateSelectedSampler(sampler: String) {
+        _sampler.value = sampler
+        settingsManager.selectedSampler = sampler
+    }
+
+    fun updateSelectedScheduler(scheduler: String) {
+        _selectedScheduler.value = scheduler
+        settingsManager.selectedScheduler = scheduler
+    }
+
+    fun updateClipSkip(skip: Int) {
+        _clipSkip.value = skip
+        settingsManager.clipSkip = skip
+    }
+
+    fun updateHiresEnabled(enabled: Boolean) {
+        _hiresEnabled.value = enabled
+        settingsManager.hiresEnabled = enabled
+    }
+
+    fun updateHiresUpscaler(upscaler: String?) {
+        _hiresUpscaler.value = upscaler
+        settingsManager.hiresUpscaler = upscaler
+    }
+
+    fun updateHiresScale(scale: Float) {
+        _hiresScale.value = scale
+        settingsManager.hiresScale = scale
+    }
+
+    fun updateHiresSteps(steps: Int) {
+        _hiresSteps.value = steps
+        settingsManager.hiresSteps = steps
+    }
+
+    fun updateHiresDenoise(denoise: Float) {
+        _hiresDenoise.value = denoise
+        settingsManager.hiresDenoise = denoise
+    }
+
+    fun updateBatchCount(count: Int) {
+        _batchCount.value = count
+        settingsManager.batchCount = count
+    }
+
+    private fun saveLorasListToPrefs(list: List<SelectedLora>) {
+        try {
+            val arr = org.json.JSONArray()
+            for (item in list) {
+                val obj = org.json.JSONObject()
+                obj.put("name", item.name)
+                obj.put("strength", item.strength.toDouble())
+                arr.put(obj)
+            }
+            settingsManager.selectedLorasJson = arr.toString()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving loras list", e)
+        }
+    }
+
+    fun addLora(name: String) {
+        val current = _selectedLoras.value.toMutableList()
+        if (current.none { it.name == name }) {
+            current.add(SelectedLora(name, 0.8f))
+            _selectedLoras.value = current
+            saveLorasListToPrefs(current)
+        }
+    }
+
+    fun removeLora(name: String) {
+        val current = _selectedLoras.value.toMutableList()
+        current.removeAll { it.name == name }
+        _selectedLoras.value = current
+        saveLorasListToPrefs(current)
+    }
+
+    fun updateLoraStrength(name: String, strength: Float) {
+        val current = _selectedLoras.value.map {
+            if (it.name == name) it.copy(strength = strength) else it
+        }
+        _selectedLoras.value = current
+        saveLorasListToPrefs(current)
+    }
+
+    fun uriToBase64(context: Context, uri: Uri): String? {
+        return try {
+            val inputStream = context.contentResolver.openInputStream(uri)
+            val bytes = inputStream?.readBytes()
+            inputStream?.close()
+            if (bytes != null) {
+                android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            } else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun buildDynamicWorkflowJson(finalSeed: Long): String {
+        val root = org.json.JSONObject()
+        val ckptName = _selectedCheckpoint.value ?: "v1-5-pruned-emaonly.safetensors"
+        val mType = modelType.value
+
+        if (mType == ModelType.FLUX) {
+            // FLUX PIPELINE
+            // Node 1: Check GGUF vs Safetensors
+            val isGguf = getSelectedModelType() == UnifiedModelType.GGUF
+            val unetNode = org.json.JSONObject()
+            val unetInputs = org.json.JSONObject()
+            unetInputs.put("unet_name", ckptName)
+            if (isGguf) {
+                unetNode.put("class_type", "UnetLoaderGGUF")
+            } else {
+                unetInputs.put("weight_dtype", "fp8_e4m3fn")
+                unetNode.put("class_type", "UNETLoader")
+            }
+            unetNode.put("inputs", unetInputs)
+            root.put("1", unetNode)
+
+            // Node 2: DualCLIPLoader
+            val clipLoaderObj = org.json.JSONObject()
+            val clipLoaderInputs = org.json.JSONObject()
+            clipLoaderInputs.put("clip_name1", _selectedClip1.value)
+            clipLoaderInputs.put("clip_name2", _selectedClip2.value)
+            clipLoaderInputs.put("type", "flux")
+            clipLoaderObj.put("inputs", clipLoaderInputs)
+            clipLoaderObj.put("class_type", "DualCLIPLoader")
+            root.put("2", clipLoaderObj)
+
+            // Node 3: VAELoader
+            val vaeLoaderObj = org.json.JSONObject()
+            val vaeLoaderInputs = org.json.JSONObject()
+            val useVae = _selectedVae.value != "Automatic"
+            vaeLoaderInputs.put("vae_name", if (useVae) _selectedVae.value else "ae.safetensors")
+            vaeLoaderObj.put("inputs", vaeLoaderInputs)
+            vaeLoaderObj.put("class_type", "VAELoader")
+            root.put("3", vaeLoaderObj)
+
+            // LoRA Model Only Chaining (FLUX)
+            var currentModelOutput = org.json.JSONArray().apply { put("1"); put(0) }
+            val loraList = _selectedLoras.value
+            loraList.forEachIndexed { index, lora ->
+                val loraId = (50 + index).toString()
+                val loraNode = org.json.JSONObject()
+                val loraInputs = org.json.JSONObject()
+                loraInputs.put("lora_name", lora.name)
+                loraInputs.put("strength_model", lora.strength.toDouble())
+                loraInputs.put("model", currentModelOutput)
+                loraNode.put("inputs", loraInputs)
+                loraNode.put("class_type", "LoraLoaderModelOnly")
+                root.put(loraId, loraNode)
+
+                currentModelOutput = org.json.JSONArray().apply { put(loraId); put(0) }
+            }
+
+            // Node 4: CLIPTextEncode
+            val posNode = org.json.JSONObject()
+            val posInputs = org.json.JSONObject()
+            posInputs.put("text", _positivePrompt.value)
+            posInputs.put("clip", org.json.JSONArray().apply { put("2"); put(0) })
+            posNode.put("inputs", posInputs)
+            posNode.put("class_type", "CLIPTextEncode")
+            root.put("4", posNode)
+
+            // Node 5: CLIPTextEncode placeholder
+            val negNode = org.json.JSONObject()
+            val negInputs = org.json.JSONObject()
+            negInputs.put("text", "")
+            negInputs.put("clip", org.json.JSONArray().apply { put("2"); put(0) })
+            negNode.put("inputs", negInputs)
+            negNode.put("class_type", "CLIPTextEncode")
+            root.put("5", negNode)
+
+            // Node 6: EmptySD3LatentImage
+            val latentNode = org.json.JSONObject()
+            val latentInputs = org.json.JSONObject()
+            latentInputs.put("width", _width.value)
+            latentInputs.put("height", _height.value)
+            latentInputs.put("batch_size", _batchCount.value)
+            latentNode.put("inputs", latentInputs)
+            latentNode.put("class_type", "EmptySD3LatentImage")
+            root.put("6", latentNode)
+
+            // Node 30: FluxGuidance (Guidance Scale)
+            val guidanceNode = org.json.JSONObject()
+            val guidanceInputs = org.json.JSONObject()
+            guidanceInputs.put("guidance", _cfg.value.toDouble())
+            guidanceInputs.put("conditioning", org.json.JSONArray().apply { put("4"); put(0) })
+            guidanceNode.put("inputs", guidanceInputs)
+            guidanceNode.put("class_type", "FluxGuidance")
+            root.put("30", guidanceNode)
+
+            // Node 7: BasicGuider
+            val guiderNode = org.json.JSONObject()
+            val guiderInputs = org.json.JSONObject()
+            guiderInputs.put("model", currentModelOutput)
+            guiderInputs.put("conditioning", org.json.JSONArray().apply { put("30"); put(0) })
+            guiderNode.put("inputs", guiderInputs)
+            guiderNode.put("class_type", "BasicGuider")
+            root.put("7", guiderNode)
+
+            // Node 8: BasicScheduler
+            val schedulerNode = org.json.JSONObject()
+            val schedulerInputs = org.json.JSONObject()
+            schedulerInputs.put("model", currentModelOutput)
+            schedulerInputs.put("scheduler", _selectedScheduler.value)
+            schedulerInputs.put("steps", _steps.value)
+            schedulerInputs.put("denoise", 1.0)
+            schedulerNode.put("inputs", schedulerInputs)
+            schedulerNode.put("class_type", "BasicScheduler")
+            root.put("8", schedulerNode)
+
+            // Node 9: RandomNoise
+            val noiseNode = org.json.JSONObject()
+            val noiseInputs = org.json.JSONObject()
+            noiseInputs.put("noise_seed", finalSeed)
+            noiseNode.put("inputs", noiseInputs)
+            noiseNode.put("class_type", "RandomNoise")
+            root.put("9", noiseNode)
+
+            // Node 11: KSamplerSelect
+            val samplerSelectNode = org.json.JSONObject()
+            val samplerSelectInputs = org.json.JSONObject()
+            samplerSelectInputs.put("sampler_name", "euler")
+            samplerSelectNode.put("inputs", samplerSelectInputs)
+            samplerSelectNode.put("class_type", "KSamplerSelect")
+            root.put("11", samplerSelectNode)
+
+            // Node 10: SamplerCustomAdvanced
+            val samplerCustomNode = org.json.JSONObject()
+            val samplerCustomInputs = org.json.JSONObject()
+            samplerCustomInputs.put("noise", org.json.JSONArray().apply { put("9"); put(0) })
+            samplerCustomInputs.put("guider", org.json.JSONArray().apply { put("7"); put(0) })
+            samplerCustomInputs.put("sampler", org.json.JSONArray().apply { put("11"); put(0) })
+            samplerCustomInputs.put("sigmas", org.json.JSONArray().apply { put("8"); put(0) })
+            samplerCustomInputs.put("latent_image", org.json.JSONArray().apply { put("6"); put(0) })
+            samplerCustomNode.put("inputs", samplerCustomInputs)
+            samplerCustomNode.put("class_type", "SamplerCustomAdvanced")
+            root.put("10", samplerCustomNode)
+
+            // Node 12: VAEDecode
+            val decodeNode = org.json.JSONObject()
+            val decodeInputs = org.json.JSONObject()
+            decodeInputs.put("samples", org.json.JSONArray().apply { put("10"); put(0) })
+            decodeInputs.put("vae", org.json.JSONArray().apply { put("3"); put(0) })
+            decodeNode.put("inputs", decodeInputs)
+            decodeNode.put("class_type", "VAEDecode")
+            root.put("12", decodeNode)
+
+            // Node 13: SaveImage
+            val saveNode = org.json.JSONObject()
+            val saveInputs = org.json.JSONObject()
+            saveInputs.put("images", org.json.JSONArray().apply { put("12"); put(0) })
+            saveInputs.put("filename_prefix", "ComfyPad_Flux")
+            saveNode.put("inputs", saveInputs)
+            saveNode.put("class_type", "SaveImage")
+            root.put("13", saveNode)
+
+        } else {
+            // STANDARD / SDXL / TURBO PIPELINE
+            // 1. Checkpoint Loader Simple
+            val ckptNode = org.json.JSONObject()
+            val ckptInputs = org.json.JSONObject()
+            ckptInputs.put("ckpt_name", ckptName)
+            ckptNode.put("inputs", ckptInputs)
+            ckptNode.put("class_type", "CheckpointLoaderSimple")
+            root.put("4", ckptNode)
+
+            // 2. VAE Loader (if not "Automatic")
+            val useVae = _selectedVae.value != "Automatic"
+            if (useVae) {
+                val vaeNode = org.json.JSONObject()
+                val vaeInputs = org.json.JSONObject()
+                vaeInputs.put("vae_name", _selectedVae.value)
+                vaeNode.put("inputs", vaeInputs)
+                vaeNode.put("class_type", "VAELoader")
+                root.put("10", vaeNode)
+            }
+
+            // 3. Chain LoRAs if selected
+            var currentModelOutput = org.json.JSONArray().apply { put("4"); put(0) }
+            var currentClipOutput = org.json.JSONArray().apply { put("4"); put(1) }
+
+            val loraList = _selectedLoras.value
+            loraList.forEachIndexed { index, lora ->
+                val loraId = (50 + index).toString()
+                val loraNode = org.json.JSONObject()
+                val loraInputs = org.json.JSONObject()
+                loraInputs.put("lora_name", lora.name)
+                loraInputs.put("strength_model", lora.strength.toDouble())
+                loraInputs.put("strength_clip", lora.strength.toDouble())
+                loraInputs.put("model", currentModelOutput)
+                loraInputs.put("clip", currentClipOutput)
+                loraNode.put("inputs", loraInputs)
+                loraNode.put("class_type", "LoraLoader")
+                root.put(loraId, loraNode)
+
+                currentModelOutput = org.json.JSONArray().apply { put(loraId); put(0) }
+                currentClipOutput = org.json.JSONArray().apply { put(loraId); put(1) }
+            }
+
+            // CLIP Set Last Layer (Clip Skip)
+            val cSkip = _clipSkip.value
+            if (cSkip > 1) {
+                val clipSkipId = "15"
+                val clipSkipNode = org.json.JSONObject()
+                val clipSkipInputs = org.json.JSONObject()
+                clipSkipInputs.put("stop_at_clip_layer", -cSkip)
+                clipSkipInputs.put("clip", currentClipOutput)
+                clipSkipNode.put("inputs", clipSkipInputs)
+                clipSkipNode.put("class_type", "CLIPSetLastLayer")
+                root.put(clipSkipId, clipSkipNode)
+                
+                currentClipOutput = org.json.JSONArray().apply { put(clipSkipId); put(0) }
+            }
+
+            // 4. Positive Prompt text encode
+            val posNode = org.json.JSONObject()
+            val posInputs = org.json.JSONObject()
+            posInputs.put("text", _positivePrompt.value)
+            posInputs.put("clip", currentClipOutput)
+            posNode.put("inputs", posInputs)
+            posNode.put("class_type", "CLIPTextEncode")
+            root.put("6", posNode)
+
+            // 5. Negative Prompt text encode
+            val negNode = org.json.JSONObject()
+            val negInputs = org.json.JSONObject()
+            negInputs.put("text", _negativePrompt.value)
+            negInputs.put("clip", currentClipOutput)
+            negNode.put("inputs", negInputs)
+            negNode.put("class_type", "CLIPTextEncode")
+            root.put("7", negNode)
+
+            // 6. Empty Latent Image
+            val latentNode = org.json.JSONObject()
+            val latentInputs = org.json.JSONObject()
+            latentInputs.put("width", _width.value)
+            latentInputs.put("height", _height.value)
+            latentInputs.put("batch_size", _batchCount.value)
+            latentNode.put("inputs", latentInputs)
+            latentNode.put("class_type", "EmptyLatentImage")
+            root.put("5", latentNode)
+
+            // 7. KSampler (base)
+            val samplerNode = org.json.JSONObject()
+            val samplerInputs = org.json.JSONObject()
+            samplerInputs.put("seed", finalSeed)
+            samplerInputs.put("steps", _steps.value)
+            samplerInputs.put("cfg", _cfg.value.toDouble())
+            samplerInputs.put("sampler_name", _sampler.value)
+            samplerInputs.put("scheduler", _selectedScheduler.value)
+            samplerInputs.put("denoise", 1.0)
+            samplerInputs.put("model", currentModelOutput)
+            samplerInputs.put("positive", org.json.JSONArray().apply { put("6"); put(0) })
+            samplerInputs.put("negative", org.json.JSONArray().apply { put("7"); put(0) })
+            samplerInputs.put("latent_image", org.json.JSONArray().apply { put("5"); put(0) })
+            samplerNode.put("inputs", samplerInputs)
+            samplerNode.put("class_type", "KSampler")
+            root.put("3", samplerNode)
+
+            val vaeRef = if (useVae) {
+                org.json.JSONArray().apply { put("10"); put(0) }
+            } else {
+                org.json.JSONArray().apply { put("4"); put(2) }
+            }
+
+            if (!_hiresEnabled.value) {
+                // Decoded base output
+                val decodeNode = org.json.JSONObject()
+                val decodeInputs = org.json.JSONObject()
+                decodeInputs.put("samples", org.json.JSONArray().apply { put("3"); put(0) })
+                decodeInputs.put("vae", vaeRef)
+                decodeNode.put("inputs", decodeInputs)
+                decodeNode.put("class_type", "VAEDecode")
+                root.put("8", decodeNode)
+
+                // SaveImage
+                val saveNode = org.json.JSONObject()
+                val saveInputs = org.json.JSONObject()
+                saveInputs.put("filename_prefix", "ComfyPad")
+                saveInputs.put("images", org.json.JSONArray().apply { put("8"); put(0) })
+                saveNode.put("inputs", saveInputs)
+                saveNode.put("class_type", "SaveImage")
+                root.put("9", saveNode)
+            } else {
+                // Latent Upscale
+                val upscaleNode = org.json.JSONObject()
+                val upscaleInputs = org.json.JSONObject()
+                upscaleInputs.put("samples", org.json.JSONArray().apply { put("3"); put(0) })
+                upscaleInputs.put("upscale_method", "nearest-exact")
+                
+                val scaledWidth = ((_width.value * _hiresScale.value).toInt() / 64) * 64
+                val scaledHeight = ((_height.value * _hiresScale.value).toInt() / 64) * 64
+                upscaleInputs.put("width", if (scaledWidth < 64) 64 else scaledWidth)
+                upscaleInputs.put("height", if (scaledHeight < 64) 64 else scaledHeight)
+                upscaleInputs.put("crop", "disabled")
+                upscaleNode.put("inputs", upscaleInputs)
+                upscaleNode.put("class_type", "LatentUpscale")
+                root.put("20", upscaleNode)
+
+                // KSampler (hires)
+                val samplerHiresNode = org.json.JSONObject()
+                val samplerHiresInputs = org.json.JSONObject()
+                samplerHiresInputs.put("seed", finalSeed)
+                samplerHiresInputs.put("steps", _hiresSteps.value)
+                samplerHiresInputs.put("cfg", _cfg.value.toDouble())
+                samplerHiresInputs.put("sampler_name", _sampler.value)
+                samplerHiresInputs.put("scheduler", _selectedScheduler.value)
+                samplerHiresInputs.put("denoise", _hiresDenoise.value.toDouble())
+                samplerHiresInputs.put("model", currentModelOutput)
+                samplerHiresInputs.put("positive", org.json.JSONArray().apply { put("6"); put(0) })
+                samplerHiresInputs.put("negative", org.json.JSONArray().apply { put("7"); put(0) })
+                samplerHiresInputs.put("latent_image", org.json.JSONArray().apply { put("20"); put(0) })
+                samplerHiresNode.put("inputs", samplerHiresInputs)
+                samplerHiresNode.put("class_type", "KSampler")
+                root.put("21", samplerHiresNode)
+
+                // VAEDecode (hires)
+                val decodeHiresNode = org.json.JSONObject()
+                val decodeHiresInputs = org.json.JSONObject()
+                decodeHiresInputs.put("samples", org.json.JSONArray().apply { put("21"); put(0) })
+                decodeHiresInputs.put("vae", vaeRef)
+                decodeHiresNode.put("inputs", decodeHiresInputs)
+                decodeHiresNode.put("class_type", "VAEDecode")
+                root.put("22", decodeHiresNode)
+
+                // SaveImage (hires)
+                val saveHiresNode = org.json.JSONObject()
+                val saveHiresInputs = org.json.JSONObject()
+                saveHiresInputs.put("filename_prefix", "ComfyPad")
+                saveHiresInputs.put("images", org.json.JSONArray().apply { put("22"); put(0) })
+                saveHiresNode.put("inputs", saveHiresInputs)
+                saveHiresNode.put("class_type", "SaveImage")
+                root.put("23", saveHiresNode)
+            }
+        }
+
+        // Intercept workflow to append ReActor nodes when Face Swap toggled ON and ReActor engine is designated.
+        val faceSwapActive = _genFaceSwapEnabled.value
+        val reactorSelected = settingsManager.faceSwapEngine == "reactor"
+        if (faceSwapActive && reactorSelected) {
+            val sourceFaceUri = _genFaceSwapSourceFaceUri.value
+            val base64Face = if (sourceFaceUri != null) uriToBase64(context, sourceFaceUri) else null
+            if (base64Face != null) {
+                val decodeNodeId = if (mType == ModelType.FLUX) "12" else if (_hiresEnabled.value) "22" else "8"
+                val saveNodeId = if (mType == ModelType.FLUX) "13" else if (_hiresEnabled.value) "23" else "9"
+
+                // Node 200: ReActorLoadFaceModel
+                val loadFaceNode = org.json.JSONObject()
+                val loadFaceInputs = org.json.JSONObject()
+                loadFaceInputs.put("face_model", "inswapper_128.onnx")
+                loadFaceNode.put("inputs", loadFaceInputs)
+                loadFaceNode.put("class_type", "ReActorLoadFaceModel")
+                root.put("200", loadFaceNode)
+
+                // Node 201: ReActorFaceSwap
+                val swapNode = org.json.JSONObject()
+                val swapInputs = org.json.JSONObject()
+                swapInputs.put("enabled", true)
+                swapInputs.put("input_image", org.json.JSONArray().apply { put(decodeNodeId); put(0) })
+                swapInputs.put("source_image", base64Face)
+                swapInputs.put("face_restore_model", _genFaceSwapRestoreModel.value)
+                swapInputs.put("face_restore_visibility", _genFaceSwapVisibility.value.toDouble())
+                swapInputs.put("codeformer_weight", _genFaceSwapWeight.value.toDouble())
+                swapInputs.put("detect_gender_source", "no")
+                swapInputs.put("detect_gender_input", "no")
+                swapInputs.put("source_faces_index", "0")
+                swapInputs.put("input_faces_index", "0")
+                swapInputs.put("console_log_level", 1)
+                swapNode.put("inputs", swapInputs)
+                swapNode.put("class_type", "ReActorFaceSwap")
+                root.put("201", swapNode)
+
+                // Reroute standard SaveImage input to Node 201
+                val origSaveNode = root.optJSONObject(saveNodeId)
+                if (origSaveNode != null) {
+                    val saveInputsObj = origSaveNode.optJSONObject("inputs")
+                    if (saveInputsObj != null) {
+                        saveInputsObj.put("images", org.json.JSONArray().apply { put("201"); put(0) })
+                    }
+                }
+            }
+        }
+
+        return root.toString()
     }
 
     // Setters
@@ -279,31 +1236,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Generation Trigger
     fun triggerGeneration() {
         viewModelScope.launch {
-            // Find template content
-            val templateJson = if (_activeWorkflowId.value != null) {
-                val preset = repository.allPresets.first().find { it.id == _activeWorkflowId.value }
-                preset?.jsonContent ?: defaultWorkflowTemplate
-            } else {
-                defaultWorkflowTemplate
-            }
-
             val finalSeed = if (_isSeedRandom.value) {
                 (0..Long.MAX_VALUE).random()
             } else {
                 if (_seed.value < 0) 123456L else _seed.value
             }
 
-            val finalJson = repository.modifyWorkflowJson(
-                templateJson = templateJson,
-                positivePrompt = _positivePrompt.value,
-                negativePrompt = _negativePrompt.value,
-                seed = finalSeed,
-                steps = _steps.value,
-                cfg = _cfg.value,
-                sampler = _sampler.value,
-                width = _width.value,
-                height = _height.value
-            )
+            val finalJson = if (_activeWorkflowId.value == null) {
+                buildDynamicWorkflowJson(finalSeed)
+            } else {
+                val templateJson = repository.allPresets.first().find { it.id == _activeWorkflowId.value }?.jsonContent ?: defaultWorkflowTemplate
+                repository.modifyWorkflowJson(
+                    templateJson = templateJson,
+                    positivePrompt = _positivePrompt.value,
+                    negativePrompt = _negativePrompt.value,
+                    seed = finalSeed,
+                    steps = _steps.value,
+                    cfg = _cfg.value,
+                    sampler = _sampler.value,
+                    width = _width.value,
+                    height = _height.value
+                )
+            }
 
             comfyClient.queuePrompt(finalJson)
         }
