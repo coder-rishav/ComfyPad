@@ -323,6 +323,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isFetchingServerWorkflows = MutableStateFlow(false)
     val isFetchingServerWorkflows = _isFetchingServerWorkflows.asStateFlow()
 
+    private val _serverSyncError = MutableStateFlow<String?>(null)
+    val serverSyncError = _serverSyncError.asStateFlow()
+
     // Gallery options
     private val _galleryGridColumns = MutableStateFlow(2)
     val galleryGridColumns = _galleryGridColumns.asStateFlow()
@@ -2028,22 +2031,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun fetchServerWorkflows() {
         viewModelScope.launch {
             _isFetchingServerWorkflows.value = true
+            _serverSyncError.value = null
             try {
-                // Option A: GET /workflows
                 val list = comfyClient.getServerWorkflows()
-                if (list.isNotEmpty()) {
-                    _serverWorkflows.value = list
-                } else {
-                    // Option C: GET /history based scan
-                    val historyMap = comfyClient.getWorkflowsFromHistory()
-                    if (historyMap.isNotEmpty()) {
-                        _serverWorkflows.value = historyMap.keys.toList()
-                    } else {
-                        _serverWorkflows.value = emptyList()
-                    }
-                }
+                _serverWorkflows.value = list
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching server workflows", e)
+                _serverSyncError.value = "Server workflow sync requires ComfyUI 0.2.0+"
                 _serverWorkflows.value = emptyList()
             } finally {
                 _isFetchingServerWorkflows.value = false

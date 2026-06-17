@@ -421,27 +421,86 @@ class ComfyClient(
 
     suspend fun getServerWorkflows(): List<String> = withContext(Dispatchers.IO) {
         val request = Request.Builder()
-            .url("${getBaseUrl()}/workflows")
+            .url("${getBaseUrl()}/userdata?dir=workflows&recurse=true&split=false")
             .get()
             .build()
-        try {
-            okHttpClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val body = response.body?.string() ?: "[]"
-                    val array = org.json.JSONArray(body)
-                    List(array.length()) { array.getString(it) }
-                } else {
-                    emptyList()
+        
+        okHttpClient.newCall(request).execute().use { response ->
+            if (response.isSuccessful) {
+                val body = response.body?.string() ?: "[]"
+                val result = mutableListOf<String>()
+                try {
+                    val trimmed = body.trim()
+                    if (trimmed.startsWith("[")) {
+                        val array = org.json.JSONArray(trimmed)
+                        for (i in 0 until array.length()) {
+                            val item = array.opt(i)
+                            if (item is String) {
+                                result.add(item)
+                            } else if (item is org.json.JSONObject) {
+                                val name = item.optString("name").ifEmpty { item.optString("path") }
+                                if (name.isNotEmpty()) {
+                                    result.add(name)
+                                }
+                            }
+                        }
+                    } else if (trimmed.startsWith("{")) {
+                        val obj = org.json.JSONObject(trimmed)
+                        val filesArray = obj.optJSONArray("files") ?: obj.optJSONArray("items")
+                        if (filesArray != null) {
+                            for (i in 0 until filesArray.length()) {
+                                val item = filesArray.opt(i)
+                                if (item is String) {
+                                    result.add(item)
+                                } else if (item is org.json.JSONObject) {
+                                    val name = item.optString("name").ifEmpty { item.optString("path") }
+                                    if (name.isNotEmpty()) {
+                                        result.add(name)
+                                    }
+                                }
+                            }
+                        } else {
+                            // Flat list of keys or values
+                            val keys = obj.keys()
+                            while (keys.hasNext()) {
+                                val key = keys.next()
+                                if (key.endsWith(".json", ignoreCase = true)) {
+                                    result.add(key)
+                                }
+                                when (val value = obj.get(key)) {
+                                    is String -> {
+                                        if (value.endsWith(".json", ignoreCase = true)) {
+                                            result.add(value)
+                                        }
+                                    }
+                                    is org.json.JSONObject -> {
+                                        val name = value.optString("name").ifEmpty { value.optString("path") }
+                                        if (name.isNotEmpty()) {
+                                            result.add(name)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Exception occurred during parsing
                 }
+                result.map { it.trim().removePrefix("workflows/") }.distinct()
+            } else {
+                throw Exception("Server workflow sync requires ComfyUI 0.2.0+")
             }
-        } catch (e: Exception) {
-            emptyList()
         }
     }
 
     suspend fun getServerWorkflowJson(name: String): String? = withContext(Dispatchers.IO) {
+        val encodedName = try {
+            name.split("/").joinToString("/") { java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20") }
+        } catch (e: Exception) {
+            name
+        }
         val request = Request.Builder()
-            .url("${getBaseUrl()}/workflows/$name")
+            .url("${getBaseUrl()}/userdata/workflows/$encodedName")
             .get()
             .build()
         try {

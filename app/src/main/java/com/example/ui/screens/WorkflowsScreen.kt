@@ -53,6 +53,7 @@ fun WorkflowsScreen(
 
     val serverWorkflows by viewModel.serverWorkflows.collectAsState()
     val isFetchingServerWorkflows by viewModel.isFetchingServerWorkflows.collectAsState()
+    val serverSyncError by viewModel.serverSyncError.collectAsState()
     val connectionStatus by viewModel.connectionStatus.collectAsState()
     val isConnected = connectionStatus == ConnectionStatus.CONNECTED
 
@@ -173,27 +174,14 @@ fun WorkflowsScreen(
             }
         },
         floatingActionButton = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                // Import FAB
-                SmallFloatingActionButton(
-                    onClick = { importLauncher.launch("application/json") },
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.testTag("import_workflow_button")
-                ) {
-                    Icon(Icons.Default.FileDownload, contentDescription = "Import JSON Workflow")
-                }
-
-                // Add Preset FAB
-                FloatingActionButton(
-                    onClick = {
-                        textInput = ""
-                        showAddDialog = true
-                    },
-                    modifier = Modifier.testTag("add_workflow_button")
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Save Current as Workflow")
-                }
+            FloatingActionButton(
+                onClick = {
+                    textInput = ""
+                    showAddDialog = true
+                },
+                modifier = Modifier.testTag("add_workflow_button")
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Save Current as Workflow")
             }
         }
     ) { innerPadding ->
@@ -209,20 +197,59 @@ fun WorkflowsScreen(
             item {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
                 ) {
-                    Icon(
-                        Icons.Default.CloudQueue,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Server Workflows",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.secondary
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.CloudQueue,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Server Workflows",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.fetchServerWorkflows()
+                            Toast.makeText(context, "Syncing server workflows...", Toast.LENGTH_SHORT).show()
+                        },
+                        enabled = !isFetchingServerWorkflows,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f))
+                    ) {
+                        if (isFetchingServerWorkflows) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        } else {
+                            Icon(
+                                Icons.Default.Sync,
+                                contentDescription = "Sync from PC",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.secondary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Text(
+                            text = "Sync",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
                 }
             }
 
@@ -241,16 +268,22 @@ fun WorkflowsScreen(
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(
-                                    imageVector = Icons.Default.Dns,
+                                    imageVector = if (serverSyncError != null) Icons.Default.CloudOff else Icons.Default.Dns,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.outline,
+                                    tint = if (serverSyncError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
                                     modifier = Modifier.size(36.dp)
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = if (isConnected) "No workflows saved on ComfyUI server" else "Connect ComfyUI server to fetch workflows",
+                                    text = when {
+                                        serverSyncError != null -> serverSyncError!!
+                                        isConnected -> "No workflows found. Save a workflow in ComfyUI web UI first, then tap Sync."
+                                        else -> "Connect to ComfyUI server to fetch your saved workflows."
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline
+                                    color = if (serverSyncError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier.padding(horizontal = 8.dp)
                                 )
                             }
                         }
@@ -365,6 +398,25 @@ fun WorkflowsScreen(
                 }
             }
 
+            item {
+                OutlinedButton(
+                    onClick = { importLauncher.launch("application/json") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("import_workflow_button"),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                ) {
+                    Icon(Icons.Default.FileDownload, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Import Workflow JSON file",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+
             if (presets.isEmpty()) {
                 item {
                     Card(
@@ -387,9 +439,11 @@ fun WorkflowsScreen(
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "No local workflows found. Tap '+' to create.",
+                                    text = "No local workflows yet. Import a .json file or save your current Generate settings as a preset.",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline
+                                    color = MaterialTheme.colorScheme.outline,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier.padding(horizontal = 8.dp)
                                 )
                             }
                         }
