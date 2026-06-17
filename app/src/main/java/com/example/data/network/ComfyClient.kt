@@ -418,4 +418,73 @@ class ComfyClient(
             emptyList()
         }
     }
+
+    suspend fun getServerWorkflows(): List<String> = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${getBaseUrl()}/workflows")
+            .get()
+            .build()
+        try {
+            okHttpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: "[]"
+                    val array = org.json.JSONArray(body)
+                    List(array.length()) { array.getString(it) }
+                } else {
+                    emptyList()
+                }
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun getServerWorkflowJson(name: String): String? = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${getBaseUrl()}/workflows/$name")
+            .get()
+            .build()
+        try {
+            okHttpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    response.body?.string()
+                } else {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    suspend fun getWorkflowsFromHistory(): Map<String, String> = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${getBaseUrl()}/history")
+            .get()
+            .build()
+        try {
+            okHttpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: "{}"
+                    val root = JSONObject(body)
+                    val map = mutableMapOf<String, String>()
+                    val keys = root.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val histObj = root.optJSONObject(key) ?: continue
+                        val prompt = histObj.optJSONObject("prompt") ?: continue
+                        val extraPngInfo = histObj.optJSONObject("extra_pnginfo")
+                        val workflowName = extraPngInfo?.optJSONObject("workflow")?.optString("name")
+                            ?: "History Workflow $key"
+                        map[workflowName] = prompt.toString()
+                    }
+                    map
+                } else {
+                    emptyMap()
+                }
+            }
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
 }

@@ -313,6 +313,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isTestingConnection = MutableStateFlow(false)
     val isTestingConnection = _isTestingConnection.asStateFlow()
 
+    // Loaded workflow state for Dynamic Workflow UI Generator
+    private val _loadedWorkflow = MutableStateFlow<LoadedWorkflow?>(null)
+    val loadedWorkflow = _loadedWorkflow.asStateFlow()
+
+    private val _serverWorkflows = MutableStateFlow<List<String>>(emptyList())
+    val serverWorkflows = _serverWorkflows.asStateFlow()
+
+    private val _isFetchingServerWorkflows = MutableStateFlow(false)
+    val isFetchingServerWorkflows = _isFetchingServerWorkflows.asStateFlow()
+
     // Gallery options
     private val _galleryGridColumns = MutableStateFlow(2)
     val galleryGridColumns = _galleryGridColumns.asStateFlow()
@@ -1909,7 +1919,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (_seed.value < 0) 123456L else _seed.value
             }
 
-            val finalJson = if (_activeWorkflowId.value == null) {
+            val finalJson = if (_loadedWorkflow.value != null) {
+                val loaded = _loadedWorkflow.value!!
+                WorkflowParser.rebuildWorkflowJson(loaded.originalJson, loaded.orderedSections)
+            } else if (_activeWorkflowId.value == null) {
                 buildDynamicWorkflowJson(finalSeed)
             } else {
                 val templateJson = repository.allPresets.first().find { it.id == _activeWorkflowId.value }?.jsonContent ?: defaultWorkflowTemplate
@@ -1945,6 +1958,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Workflows management
     fun loadWorkflow(preset: WorkflowPreset) {
         _activeWorkflowId.value = preset.id
+        loadLocalWorkflow(preset)
         viewModelScope.launch {
             try {
                 // Parse properties from loaded JSON if possible to populate Generate UI
@@ -2009,6 +2023,127 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e(TAG, "Error populating load workflow fields", e)
             }
         }
+    }
+
+    fun fetchServerWorkflows() {
+        viewModelScope.launch {
+            _isFetchingServerWorkflows.value = true
+            try {
+                // Option A: GET /workflows
+                val list = comfyClient.getServerWorkflows()
+                if (list.isNotEmpty()) {
+                    _serverWorkflows.value = list
+                } else {
+                    // Option C: GET /history based scan
+                    val historyMap = comfyClient.getWorkflowsFromHistory()
+                    if (historyMap.isNotEmpty()) {
+                        _serverWorkflows.value = historyMap.keys.toList()
+                    } else {
+                        _serverWorkflows.value = emptyList()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching server workflows", e)
+                _serverWorkflows.value = emptyList()
+            } finally {
+                _isFetchingServerWorkflows.value = false
+            }
+        }
+    }
+
+    fun loadServerWorkflow(name: String) {
+        viewModelScope.launch {
+            try {
+                _isFetchingServerWorkflows.value = true
+                val json = comfyClient.getServerWorkflowJson(name)
+                if (json != null) {
+                    val parsed = WorkflowParser.parseWorkflowJson(
+                        jsonStr = json,
+                        name = name,
+                        source = WorkflowSource.SERVER,
+                        objectInfo = cachedObjectInfo
+                    )
+                    _loadedWorkflow.value = parsed
+                    _activeWorkflowId.value = null
+                } else {
+                    // Try history-based JSON if the direct fetch returned null
+                    val historyMap = comfyClient.getWorkflowsFromHistory()
+                    val histJson = historyMap[name]
+                    if (histJson != null) {
+                        val parsed = WorkflowParser.parseWorkflowJson(
+                            jsonStr = histJson,
+                            name = name,
+                            source = WorkflowSource.SERVER,
+                            objectInfo = cachedObjectInfo
+                        )
+                        _loadedWorkflow.value = parsed
+                        _activeWorkflowId.value = null
+                    } else {
+                        Log.e(TAG, "Server returned null JSON for workflow: $name")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading server workflow: $name", e)
+            } finally {
+                _isFetchingServerWorkflows.value = false
+            }
+        }
+    }
+
+    fun loadLocalWorkflow(preset: WorkflowPreset) {
+        viewModelScope.launch {
+            try {
+                val parsed = WorkflowParser.parseWorkflowJson(
+                    jsonStr = preset.jsonContent,
+                    name = preset.name,
+                    source = WorkflowSource.LOCAL,
+                    objectInfo = cachedObjectInfo
+                )
+                _loadedWorkflow.value = parsed
+                _activeWorkflowId.value = preset.id
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading local workflow: ${preset.name}", e)
+            }
+        }
+    }
+
+    fun updateWorkflowField(nodeId: String, fieldName: String, newValue: Any) {
+        val current = _loadedWorkflow.value ?: return
+        val updatedSections = current.orderedSections.map { section ->
+            if (section.nodeId == nodeId) {
+                val updatedFields = section.editableFields.map { field ->
+                    if (field.fieldName == fieldName) {
+                        field.copy(currentValue = newValue)
+                    } else {
+                        field
+                    }
+                }
+                section.copy(editableFields = updatedFields)
+            } else {
+                section
+            }
+        }
+        _loadedWorkflow.value = current.copy(orderedSections = updatedSections)
+    }
+
+    fun uploadWorkflowImage(nodeId: String, fieldName: String, uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val filename = repository.uploadImageToComfyUI(uri)
+                if (filename != null) {
+                    updateWorkflowField(nodeId, fieldName, filename)
+                } else {
+                    Log.e(TAG, "Failed to upload workflow image")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error uploading workflow image", e)
+            }
+        }
+    }
+
+    fun clearLoadedWorkflow() {
+        _loadedWorkflow.value = null
+        _activeWorkflowId.value = null
     }
 
     fun saveCurrentAsWorkflowPreset(name: String) {

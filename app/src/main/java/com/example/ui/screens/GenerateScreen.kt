@@ -195,6 +195,7 @@ fun GenerateScreen(viewModel: MainViewModel) {
     val modelType by viewModel.modelType.collectAsState()
 
     val isGenerating by viewModel.isGenerating.collectAsState()
+    val activeWorkflow by viewModel.loadedWorkflow.collectAsState()
     val currentStep by viewModel.currentStep.collectAsState()
     val totalSteps by viewModel.totalSteps.collectAsState()
     val previewBitmap by viewModel.previewBitmap.collectAsState()
@@ -429,13 +430,19 @@ fun GenerateScreen(viewModel: MainViewModel) {
                     }
                 }
             }
-
-            // Positive text prompt Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            
+            if (activeWorkflow != null) {
+                WorkflowModeUI(
+                    activeWorkflow = activeWorkflow!!,
+                    viewModel = viewModel
+                )
+            } else {
+                // Positive text prompt Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
                     Text(
@@ -2043,6 +2050,7 @@ fun GenerateScreen(viewModel: MainViewModel) {
                     }
                 }
             }
+            }
         }
 
         // Generate Bottom Sheet / Float Button
@@ -2067,7 +2075,7 @@ fun GenerateScreen(viewModel: MainViewModel) {
                         .fillMaxWidth()
                         .height(56.dp)
                         .testTag("generate_artwork_button"),
-                    enabled = !isGenerating && positivePrompt.isNotEmpty(),
+                    enabled = !isGenerating && (activeWorkflow != null || positivePrompt.isNotEmpty()),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Row(

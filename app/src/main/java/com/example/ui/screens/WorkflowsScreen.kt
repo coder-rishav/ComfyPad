@@ -11,9 +11,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -34,7 +33,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import coil.compose.rememberAsyncImagePainter
 import com.example.data.database.WorkflowPreset
+import com.example.data.network.ConnectionStatus
 import com.example.ui.viewmodel.MainViewModel
+import com.example.ui.viewmodel.WorkflowSource
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -48,13 +49,22 @@ fun WorkflowsScreen(
     val context = LocalContext.current
     val presets by viewModel.allPresets.collectAsState(initial = emptyList())
     val activeWorkflowId by viewModel.activeWorkflowId.collectAsState()
+    val activeWorkflow by viewModel.loadedWorkflow.collectAsState()
+
+    val serverWorkflows by viewModel.serverWorkflows.collectAsState()
+    val isFetchingServerWorkflows by viewModel.isFetchingServerWorkflows.collectAsState()
+    val connectionStatus by viewModel.connectionStatus.collectAsState()
+    val isConnected = connectionStatus == ConnectionStatus.CONNECTED
 
     var showAddDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var workflowToRename by remember { mutableStateOf<WorkflowPreset?>(null) }
     var textInput by remember { mutableStateOf("") }
-
     var selectedExportPreset by remember { mutableStateOf<WorkflowPreset?>(null) }
+
+    LaunchedEffect(Unit) {
+        viewModel.fetchServerWorkflows()
+    }
 
     // Import file picker Launcher
     val importLauncher = rememberLauncherForActivityResult(
@@ -89,15 +99,77 @@ fun WorkflowsScreen(
                     .statusBarsPadding()
                     .padding(16.dp)
             ) {
-                Text(
-                    text = "Workflow Presets",
-                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
-                )
-                Text(
-                    text = "Load, create, import, and export ComfyUI node workflows",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Workflow Studio",
+                            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = "Load dynamic pipelines directly from files or ComfyUI server",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    // Refresh Button
+                    IconButton(
+                        onClick = {
+                            viewModel.fetchServerWorkflows()
+                            Toast.makeText(context, "Syncing server workflows...", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier
+                            .background(
+                                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f),
+                                RoundedCornerShape(12.dp)
+                            )
+                    ) {
+                        if (isFetchingServerWorkflows) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Sync, contentDescription = "Sync from PC")
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Connection Status Card
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isConnected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                            else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isConnected) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                        else MaterialTheme.colorScheme.error.copy(alpha = 0.3f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(if (isConnected) Color(0xFF4CAF50) else Color(0xFFF44336))
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isConnected) "Connected — ${serverWorkflows.size} workflows found on server"
+                                   else "Offline — Showing ${presets.size} local workflows",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                            color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
             }
         },
         floatingActionButton = {
@@ -125,73 +197,86 @@ fun WorkflowsScreen(
             }
         }
     ) { innerPadding ->
-        if (presets.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .testTag("workflows_preset_grid"),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // SECTION 1 — Server Workflows
+            item {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
                     Icon(
-                        imageVector = Icons.Default.Hub,
-                        contentDescription = "Empty Workflows Info",
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.outline
+                        Icons.Default.CloudQueue,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(20.dp)
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("No local workflows found.", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        "Press the + button to save your current setup as a preset.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
+                        text = "Server Workflows",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.secondary
                     )
                 }
             }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(1),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .testTag("workflows_preset_grid")
-            ) {
-                items(presets) { preset ->
-                    val isActive = preset.id == activeWorkflowId
-                    val formattedDate = SimpleDateFormat("MMM d, yyyy - HH:mm", Locale.getDefault())
-                        .format(Date(preset.dateModified))
 
-                    // Card representing each preset
+            if (serverWorkflows.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = Icons.Default.Dns,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = if (isConnected) "No workflows saved on ComfyUI server" else "Connect ComfyUI server to fetch workflows",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                items(serverWorkflows) { flowName ->
+                    val isLoaded = activeWorkflow?.name == flowName && activeWorkflow?.source == WorkflowSource.SERVER
+
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .combinedClickable(
                                 onClick = {
-                                    viewModel.loadWorkflow(preset)
+                                    viewModel.loadServerWorkflow(flowName)
                                     onWorkflowLoaded()
-                                    Toast
-                                        .makeText(
-                                            context,
-                                            "Loaded: ${preset.name}",
-                                            Toast.LENGTH_SHORT
-                                        )
-                                        .show()
-                                },
-                                onLongClick = {
-                                    workflowToRename = preset
-                                    textInput = preset.name
-                                    showRenameDialog = true
+                                    Toast.makeText(context, "Loaded Server: $flowName", Toast.LENGTH_SHORT).show()
                                 }
                             ),
-                        border = if (isActive) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) 
-                                 else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                        border = if (isLoaded) BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                                 else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
                         colors = CardDefaults.cardColors(
-                            containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
-                            else MaterialTheme.colorScheme.surfaceVariant
+                            containerColor = if (isLoaded) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                                             else MaterialTheme.colorScheme.surface
                         ),
-                        shape = RoundedCornerShape(18.dp)
+                        shape = RoundedCornerShape(16.dp)
                     ) {
                         Row(
                             modifier = Modifier
@@ -199,10 +284,156 @@ fun WorkflowsScreen(
                                 .padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Thumbnail / Abstract Gradient Indicator
                             Box(
                                 modifier = Modifier
-                                    .size(72.dp)
+                                    .size(60.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        brush = Brush.linearGradient(
+                                            colors = listOf(
+                                                MaterialTheme.colorScheme.secondary,
+                                                MaterialTheme.colorScheme.tertiary
+                                            )
+                                        )
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Cloud,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(16.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = flowName.removeSuffix(".json"),
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    SuggestionChip(
+                                        onClick = {},
+                                        label = {
+                                            Text(
+                                                "SERVER",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                            )
+                                        },
+                                        colors = SuggestionChipDefaults.suggestionChipColors(
+                                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                            labelColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                    )
+                                }
+                            }
+
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = "Load",
+                                tint = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
+                }
+            }
+
+            // SECTION 2 — Local Workflows
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.FolderOpen,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Local Workflows",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            if (presets.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "No local workflows found. Tap '+' to create.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                items(presets) { preset ->
+                    val isLoaded = activeWorkflowId == preset.id || (activeWorkflow?.name == preset.name && activeWorkflow?.source == WorkflowSource.LOCAL)
+                    val formattedDate = SimpleDateFormat("MMM d, yyyy - HH:mm", Locale.getDefault())
+                        .format(Date(preset.dateModified))
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = {
+                                    viewModel.loadWorkflow(preset)
+                                    onWorkflowLoaded()
+                                    Toast.makeText(context, "Loaded Local: ${preset.name}", Toast.LENGTH_SHORT).show()
+                                },
+                                onLongClick = {
+                                    workflowToRename = preset
+                                    textInput = preset.name
+                                    showRenameDialog = true
+                                }
+                            ),
+                        border = if (isLoaded) BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                                 else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isLoaded) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                                             else MaterialTheme.colorScheme.surface
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Thumbnail or abstract background code block representation
+                            Box(
+                                modifier = Modifier
+                                    .size(60.dp)
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(
                                         brush = Brush.linearGradient(
@@ -223,17 +454,16 @@ fun WorkflowsScreen(
                                     )
                                 } else {
                                     Icon(
-                                        imageVector = Icons.Default.Gesture,
+                                        imageVector = Icons.Default.Save,
                                         contentDescription = null,
                                         tint = Color.White,
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier.size(28.dp)
                                     )
                                 }
                             }
 
                             Spacer(modifier = Modifier.width(16.dp))
 
-                            // Metadata & text details
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = preset.name,
@@ -241,34 +471,34 @@ fun WorkflowsScreen(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-
                                 Spacer(modifier = Modifier.height(4.dp))
-
-                                Text(
-                                    text = "Modified: $formattedDate",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-
-                                if (preset.isDefault) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                                        contentColor = MaterialTheme.colorScheme.primary,
-                                        shape = RoundedCornerShape(4.dp)
-                                    ) {
-                                        Text(
-                                            text = "BUILT-IN",
-                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = formattedDate,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    if (preset.isDefault) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                            contentColor = MaterialTheme.colorScheme.primary,
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "BUILT-IN",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
 
-                            // Actions
+                            // Actions row
                             Row {
-                                // Export Button
                                 IconButton(
                                     onClick = {
                                         selectedExportPreset = preset
@@ -279,7 +509,6 @@ fun WorkflowsScreen(
                                 }
 
                                 if (!preset.isDefault) {
-                                    // Delete Button
                                     IconButton(
                                         onClick = {
                                             viewModel.deletePreset(preset)
