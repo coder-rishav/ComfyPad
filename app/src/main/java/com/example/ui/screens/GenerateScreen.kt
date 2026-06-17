@@ -211,6 +211,90 @@ fun GenerateScreen(viewModel: MainViewModel) {
     var showHistoryDialog by remember { mutableStateOf(false) }
     var showAddLoraMenu by remember { mutableStateOf(false) }
 
+    var showBaseStepsEditDialog by remember { mutableStateOf(false) }
+    var baseStepsInputText by remember { mutableStateOf("") }
+
+    var showHiresStepsEditDialog by remember { mutableStateOf(false) }
+    var hiresStepsInputText by remember { mutableStateOf("") }
+
+    if (showBaseStepsEditDialog) {
+        AlertDialog(
+            onDismissRequest = { showBaseStepsEditDialog = false },
+            title = { Text("Set Base Steps") },
+            text = {
+                OutlinedTextField(
+                    value = baseStepsInputText,
+                    onValueChange = { baseStepsInputText = it },
+                    label = { Text("Steps (1-500)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.testTag("base_steps_dialog_input")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val parsed = baseStepsInputText.toIntOrNull()
+                        if (parsed != null) {
+                            viewModel.updateSteps(parsed.coerceIn(1, 500))
+                        }
+                        showBaseStepsEditDialog = false
+                    },
+                    modifier = Modifier.testTag("base_steps_dialog_confirm")
+                ) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showBaseStepsEditDialog = false },
+                    modifier = Modifier.testTag("base_steps_dialog_cancel")
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showHiresStepsEditDialog) {
+        AlertDialog(
+            onDismissRequest = { showHiresStepsEditDialog = false },
+            title = { Text("Set Hires Steps") },
+            text = {
+                OutlinedTextField(
+                    value = hiresStepsInputText,
+                    onValueChange = { hiresStepsInputText = it },
+                    label = { Text("Steps (1-500)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.testTag("hires_steps_dialog_input")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val parsed = hiresStepsInputText.toIntOrNull()
+                        if (parsed != null) {
+                            viewModel.updateHiresSteps(parsed.coerceIn(1, 500))
+                        }
+                        showHiresStepsEditDialog = false
+                    },
+                    modifier = Modifier.testTag("hires_steps_dialog_confirm")
+                ) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showHiresStepsEditDialog = false },
+                    modifier = Modifier.testTag("hires_steps_dialog_cancel")
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     val haptic = LocalHapticFeedback.current
     val scrollState = rememberScrollState()
 
@@ -785,8 +869,8 @@ fun GenerateScreen(viewModel: MainViewModel) {
                     val isTurbo = modelType == ModelType.TURBO
                     val isFlux = modelType == ModelType.FLUX
 
-                    val stepsRange = if (isTurbo) 1f..8f else 1f..50f
-                    val stepsCount = if (isTurbo) 7 else 49
+                    val stepsRange = if (isTurbo) 1f..8f else 1f..500f
+                    val stepsCount = if (isTurbo) 7 else 0
 
                     val cfgLabel = if (isFlux) "Guidance Scale" else "CFG Scale"
                     val cfgRange = if (isFlux) 1.0f..10.0f else if (isTurbo) 1.0f..2.0f else 1.0f..20.0f
@@ -800,17 +884,29 @@ fun GenerateScreen(viewModel: MainViewModel) {
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = "Generation Steps",
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                         )
-                        Text(
-                            text = "$steps",
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
-                        )
+                        Surface(
+                            onClick = {
+                                baseStepsInputText = steps.toString()
+                                showBaseStepsEditDialog = true
+                            },
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("steps_value_tap")
+                        ) {
+                            Text(
+                                text = "  $steps  ",
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                        }
                     }
                     Slider(
                         value = steps.toFloat().coerceIn(stepsRange),
@@ -1138,74 +1234,89 @@ fun GenerateScreen(viewModel: MainViewModel) {
 
                             AnimatedVisibility(visible = hiresEnabled) {
                                 Column(modifier = Modifier.padding(top = 12.dp)) {
-                                    // Upscaler dropdown
-                                    ReusableDropdown(
-                                        label = "Latent Upscaling Method",
-                                        selectedValue = hiresUpscaler ?: "nearest-exact",
-                                        options = assets.upscaleModels.ifEmpty { listOf("nearest-exact", "bilinear", "area", "bicubic") },
-                                        onValueChange = { viewModel.updateHiresUpscaler(it) }
+                                    // Upscale Factor selection in simple chips (1.25x, 1.5x, 2.0x)
+                                    Text(
+                                        text = "Upscale Factor",
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                    )
+                                    
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    val factors = listOf(1.25f, 1.5f, 2.0f)
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        factors.forEach { factor ->
+                                            val selected = hiresScale == factor
+                                            Surface(
+                                                onClick = { viewModel.updateHiresScale(factor) },
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.outline.copy(alpha = 0.1f),
+                                                border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
+                                                modifier = Modifier.testTag("hires_factor_${factor}x")
+                                            ) {
+                                                Text(
+                                                    text = "${factor}x",
+                                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // Calculated output size display
+                                    val targetWidth = (Math.round(width * hiresScale / 64.0) * 64).toInt()
+                                    val targetHeight = (Math.round(height * hiresScale / 64.0) * 64).toInt()
+                                    Text(
+                                        text = "Output Resolution: ${width}x${height}  ➔  ${targetWidth}x${targetHeight}",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Normal),
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(top = 6.dp, bottom = 12.dp)
                                     )
 
-                                    Spacer(modifier = Modifier.height(12.dp))
-
-                                    // Scale slider (1.0x to 3.0x)
+                                    // Hires steps slider (1 to 500)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = "Upscale Scale Factor",
+                                            text = "Hires Steps Pass",
                                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                                         )
-                                        Text(
-                                            text = String.format("%.2fx", hiresScale),
-                                            color = MaterialTheme.colorScheme.primary,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
-                                        )
+                                        Surface(
+                                            onClick = {
+                                                hiresStepsInputText = hiresSteps.toString()
+                                                showHiresStepsEditDialog = true
+                                            },
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.testTag("hires_steps_value_tap")
+                                        ) {
+                                            Text(
+                                                text = "  $hiresSteps  ",
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                                                modifier = Modifier.padding(vertical = 4.dp)
+                                            )
+                                        }
                                     }
                                     Slider(
-                                        value = hiresScale,
-                                        onValueChange = { viewModel.updateHiresScale(it) },
-                                        valueRange = 1.0f..3.0f,
-                                        colors = SliderDefaults.colors(
-                                            activeTrackColor = MaterialTheme.colorScheme.primary,
-                                            thumbColor = MaterialTheme.colorScheme.primary
-                                        )
-                                    )
-
-                                    Spacer(modifier = Modifier.height(12.dp))
-
-                                    // Hires steps (5 to 30)
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "Hires Steps pass",
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                        )
-                                        Text(
-                                            text = "$hiresSteps",
-                                            color = MaterialTheme.colorScheme.primary,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
-                                        )
-                                    }
-                                    Slider(
-                                        value = hiresSteps.toFloat(),
+                                        value = hiresSteps.toFloat().coerceIn(1f, 500f),
                                         onValueChange = { viewModel.updateHiresSteps(it.roundToInt()) },
-                                        valueRange = 5f..30f,
-                                        steps = 24,
+                                        valueRange = 1f..500f,
                                         colors = SliderDefaults.colors(
                                             activeTrackColor = MaterialTheme.colorScheme.primary,
                                             thumbColor = MaterialTheme.colorScheme.primary
-                                        )
+                                        ),
+                                        modifier = Modifier.testTag("hires_steps_slider")
                                     )
 
                                     Spacer(modifier = Modifier.height(12.dp))
 
-                                    // Denoise (0.0 to 1.0)
+                                    // Denoise (0.10 to 0.75, max hard cap 0.75)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1222,13 +1333,20 @@ fun GenerateScreen(viewModel: MainViewModel) {
                                         )
                                     }
                                     Slider(
-                                        value = hiresDenoise,
-                                        onValueChange = { viewModel.updateHiresDenoise(it) },
-                                        valueRange = 0.0f..1.0f,
+                                        value = hiresDenoise.coerceIn(0.10f, 0.75f),
+                                        onValueChange = { viewModel.updateHiresDenoise(it.coerceIn(0.10f, 0.75f)) },
+                                        valueRange = 0.10f..0.75f,
                                         colors = SliderDefaults.colors(
                                             activeTrackColor = MaterialTheme.colorScheme.primary,
                                             thumbColor = MaterialTheme.colorScheme.primary
-                                        )
+                                        ),
+                                        modifier = Modifier.testTag("hires_denoise_slider")
+                                    )
+                                    Text(
+                                        text = "Higher values cause image distortion",
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(top = 2.dp)
                                     )
                                 }
                             }

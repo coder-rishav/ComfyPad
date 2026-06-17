@@ -1609,7 +1609,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ckptInputs.put("ckpt_name", ckptName)
             ckptNode.put("inputs", ckptInputs)
             ckptNode.put("class_type", "CheckpointLoaderSimple")
-            root.put("4", ckptNode)
+            root.put("1", ckptNode)
 
             // 2. VAE Loader (if not "Automatic")
             val useVae = _selectedVae.value != "Automatic"
@@ -1623,8 +1623,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // 3. Chain LoRAs if selected
-            var currentModelOutput = org.json.JSONArray().apply { put("4"); put(0) }
-            var currentClipOutput = org.json.JSONArray().apply { put("4"); put(1) }
+            var currentModelOutput = org.json.JSONArray().apply { put("1"); put(0) }
+            var currentClipOutput = org.json.JSONArray().apply { put("1"); put(1) }
 
             val loraList = _selectedLoras.value
             loraList.forEachIndexed { index, lora ->
@@ -1666,7 +1666,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             posInputs.put("clip", currentClipOutput)
             posNode.put("inputs", posInputs)
             posNode.put("class_type", "CLIPTextEncode")
-            root.put("6", posNode)
+            root.put("2", posNode)
 
             // 5. Negative Prompt text encode
             val negNode = org.json.JSONObject()
@@ -1675,7 +1675,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             negInputs.put("clip", currentClipOutput)
             negNode.put("inputs", negInputs)
             negNode.put("class_type", "CLIPTextEncode")
-            root.put("7", negNode)
+            root.put("3", negNode)
 
             // 6. Empty Latent Image
             val latentNode = org.json.JSONObject()
@@ -1685,7 +1685,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             latentInputs.put("batch_size", _batchCount.value)
             latentNode.put("inputs", latentInputs)
             latentNode.put("class_type", "EmptyLatentImage")
-            root.put("5", latentNode)
+            root.put("4", latentNode)
 
             // 7. KSampler (base)
             val samplerNode = org.json.JSONObject()
@@ -1697,52 +1697,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             samplerInputs.put("scheduler", _selectedScheduler.value)
             samplerInputs.put("denoise", 1.0)
             samplerInputs.put("model", currentModelOutput)
-            samplerInputs.put("positive", org.json.JSONArray().apply { put("6"); put(0) })
-            samplerInputs.put("negative", org.json.JSONArray().apply { put("7"); put(0) })
-            samplerInputs.put("latent_image", org.json.JSONArray().apply { put("5"); put(0) })
+            samplerInputs.put("positive", org.json.JSONArray().apply { put("2"); put(0) })
+            samplerInputs.put("negative", org.json.JSONArray().apply { put("3"); put(0) })
+            samplerInputs.put("latent_image", org.json.JSONArray().apply { put("4"); put(0) })
             samplerNode.put("inputs", samplerInputs)
             samplerNode.put("class_type", "KSampler")
-            root.put("3", samplerNode)
+            root.put("5", samplerNode)
 
             val vaeRef = if (useVae) {
                 org.json.JSONArray().apply { put("10"); put(0) }
             } else {
-                org.json.JSONArray().apply { put("4"); put(2) }
+                org.json.JSONArray().apply { put("1"); put(2) }
             }
 
             if (!_hiresEnabled.value) {
                 // Decoded base output
                 val decodeNode = org.json.JSONObject()
                 val decodeInputs = org.json.JSONObject()
-                decodeInputs.put("samples", org.json.JSONArray().apply { put("3"); put(0) })
+                decodeInputs.put("samples", org.json.JSONArray().apply { put("5"); put(0) })
                 decodeInputs.put("vae", vaeRef)
                 decodeNode.put("inputs", decodeInputs)
                 decodeNode.put("class_type", "VAEDecode")
-                root.put("8", decodeNode)
+                root.put("6", decodeNode)
 
                 // SaveImage
                 val saveNode = org.json.JSONObject()
                 val saveInputs = org.json.JSONObject()
                 saveInputs.put("filename_prefix", savePrefix)
-                saveInputs.put("images", org.json.JSONArray().apply { put("8"); put(0) })
+                saveInputs.put("images", org.json.JSONArray().apply { put("6"); put(0) })
                 saveNode.put("inputs", saveInputs)
                 saveNode.put("class_type", "SaveImage")
-                root.put("9", saveNode)
+                root.put("7", saveNode)
             } else {
                 // Latent Upscale
                 val upscaleNode = org.json.JSONObject()
                 val upscaleInputs = org.json.JSONObject()
-                upscaleInputs.put("samples", org.json.JSONArray().apply { put("3"); put(0) })
+                upscaleInputs.put("samples", org.json.JSONArray().apply { put("5"); put(0) })
                 upscaleInputs.put("upscale_method", "nearest-exact")
                 
-                val scaledWidth = ((_width.value * _hiresScale.value).toInt() / 64) * 64
-                val scaledHeight = ((_height.value * _hiresScale.value).toInt() / 64) * 64
+                // Rule 3: LatentUpscale width and height calculation snapped to nearest 64 multiple
+                val factor = _hiresScale.value
+                val originalWidth = _width.value
+                val originalHeight = _height.value
+                val scaledWidth = Math.round(originalWidth * factor / 64.0) * 64
+                val scaledHeight = Math.round(originalHeight * factor / 64.0) * 64
                 upscaleInputs.put("width", if (scaledWidth < 64) 64 else scaledWidth)
                 upscaleInputs.put("height", if (scaledHeight < 64) 64 else scaledHeight)
                 upscaleInputs.put("crop", "disabled")
                 upscaleNode.put("inputs", upscaleInputs)
                 upscaleNode.put("class_type", "LatentUpscale")
-                root.put("20", upscaleNode)
+                root.put("6", upscaleNode)
 
                 // KSampler (hires)
                 val samplerHiresNode = org.json.JSONObject()
@@ -1752,32 +1756,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 samplerHiresInputs.put("cfg", _cfg.value.toDouble())
                 samplerHiresInputs.put("sampler_name", _sampler.value)
                 samplerHiresInputs.put("scheduler", _selectedScheduler.value)
-                samplerHiresInputs.put("denoise", _hiresDenoise.value.toDouble())
+                // Rule 2: Limit denoise between 0.1 and 0.75
+                val denoiseValue = _hiresDenoise.value.coerceIn(0.1f, 0.75f)
+                samplerHiresInputs.put("denoise", denoiseValue.toDouble())
                 samplerHiresInputs.put("model", currentModelOutput)
-                samplerHiresInputs.put("positive", org.json.JSONArray().apply { put("6"); put(0) })
-                samplerHiresInputs.put("negative", org.json.JSONArray().apply { put("7"); put(0) })
-                samplerHiresInputs.put("latent_image", org.json.JSONArray().apply { put("20"); put(0) })
+                samplerHiresInputs.put("positive", org.json.JSONArray().apply { put("2"); put(0) })
+                samplerHiresInputs.put("negative", org.json.JSONArray().apply { put("3"); put(0) })
+                samplerHiresInputs.put("latent_image", org.json.JSONArray().apply { put("6"); put(0) })
                 samplerHiresNode.put("inputs", samplerHiresInputs)
                 samplerHiresNode.put("class_type", "KSampler")
-                root.put("21", samplerHiresNode)
+                root.put("7", samplerHiresNode)
 
                 // VAEDecode (hires)
                 val decodeHiresNode = org.json.JSONObject()
                 val decodeHiresInputs = org.json.JSONObject()
-                decodeHiresInputs.put("samples", org.json.JSONArray().apply { put("21"); put(0) })
+                decodeHiresInputs.put("samples", org.json.JSONArray().apply { put("7"); put(0) })
                 decodeHiresInputs.put("vae", vaeRef)
                 decodeHiresNode.put("inputs", decodeHiresInputs)
                 decodeHiresNode.put("class_type", "VAEDecode")
-                root.put("22", decodeHiresNode)
+                root.put("8", decodeHiresNode)
 
                 // SaveImage (hires)
                 val saveHiresNode = org.json.JSONObject()
                 val saveHiresInputs = org.json.JSONObject()
                 saveHiresInputs.put("filename_prefix", savePrefix)
-                saveHiresInputs.put("images", org.json.JSONArray().apply { put("22"); put(0) })
+                saveHiresInputs.put("images", org.json.JSONArray().apply { put("8"); put(0) })
                 saveHiresNode.put("inputs", saveHiresInputs)
                 saveHiresNode.put("class_type", "SaveImage")
-                root.put("23", saveHiresNode)
+                root.put("9", saveHiresNode)
             }
         }
 
@@ -1786,8 +1792,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (faceSwapActive && reactorSelected) {
             val sourceFilename = _genFaceSwapSourceFilename.value
             if (sourceFilename != null) {
-                val decodeNodeId = if (mType == ModelType.FLUX) "12" else if (_hiresEnabled.value) "22" else "8"
-                val saveNodeId = if (mType == ModelType.FLUX) "13" else if (_hiresEnabled.value) "23" else "9"
+                val decodeNodeId = if (mType == ModelType.FLUX) "12" else if (_hiresEnabled.value) "8" else "6"
+                val saveNodeId = if (mType == ModelType.FLUX) "13" else if (_hiresEnabled.value) "9" else "7"
 
                 // Node 199: LoadImage Node for sourceFace
                 val loadImageNode = org.json.JSONObject()
