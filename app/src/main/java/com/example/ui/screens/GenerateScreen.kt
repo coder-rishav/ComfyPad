@@ -1245,6 +1245,9 @@ fun GenerateScreen(viewModel: MainViewModel) {
             val genFaceSwapRestoreModel by viewModel.genFaceSwapRestoreModel.collectAsState()
             val genFaceSwapVisibility by viewModel.genFaceSwapVisibility.collectAsState()
             val genFaceSwapWeight by viewModel.genFaceSwapWeight.collectAsState()
+            val genFaceSwapSourceUploading by viewModel.genFaceSwapSourceUploading.collectAsState()
+            val genFaceSwapSourceUploadError by viewModel.genFaceSwapSourceUploadError.collectAsState()
+            val genFaceSwapSourceFilename by viewModel.genFaceSwapSourceFilename.collectAsState()
             val settingsManager = viewModel.settingsManager
             val faceSwapEngine = settingsManager.faceSwapEngine
 
@@ -1386,10 +1389,39 @@ fun GenerateScreen(viewModel: MainViewModel) {
                                         ) {
                                             Text(if (genFaceSwapSourceFaceUri != null) "Change Photo" else "Select Photo")
                                         }
-                                        if (genFaceSwapSourceFaceUri != null) {
+                                        if (genFaceSwapSourceUploading) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(16.dp),
+                                                    strokeWidth = 2.dp,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = "Uploading to server...",
+                                                     style = MaterialTheme.typography.bodySmall,
+                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        } else if (genFaceSwapSourceUploadError != null) {
                                             Spacer(modifier = Modifier.height(4.dp))
                                             Text(
-                                                text = "Image loaded successfully",
+                                                text = genFaceSwapSourceUploadError ?: "Upload failed",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        } else if (genFaceSwapSourceFilename != null) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Uploaded: $genFaceSwapSourceFilename",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        } else if (genFaceSwapSourceFaceUri != null) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Selected locally",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.primary
                                             )
@@ -1430,103 +1462,353 @@ fun GenerateScreen(viewModel: MainViewModel) {
                                 }
 
                                 if (faceSwapEngine == "reactor") {
+                                    val reactorLoading by viewModel.reactorLoading.collectAsState()
+                                    val reactorError by viewModel.reactorError.collectAsState()
+                                    val reactorNodeInfo by viewModel.reactorNodeInfo.collectAsState()
+
+                                    val selectedSwapModel by viewModel.reactorSelectedSwapModel.collectAsState()
+                                    val selectedDetect by viewModel.reactorSelectedFaceDetection.collectAsState()
+                                    val selectedFaceRestore by viewModel.reactorSelectedRestoreModel.collectAsState()
+                                    val restoreVisibility by viewModel.reactorRestoreVisibility.collectAsState()
+                                    val codeformerWeight by viewModel.reactorCodeformerWeight.collectAsState()
+                                    val selectedGenSource by viewModel.reactorSelectedGenderSource.collectAsState()
+                                    val selectedGenInput by viewModel.reactorSelectedGenderInput.collectAsState()
+                                    val sourceFacesIndex by viewModel.reactorSourceFacesIndex.collectAsState()
+                                    val inputFacesIndex by viewModel.reactorInputFacesIndex.collectAsState()
+
                                     Spacer(modifier = Modifier.height(16.dp))
                                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
                                     Spacer(modifier = Modifier.height(16.dp))
 
-                                    // Restore Model Selector
-                                    var showRestoreModelDropdown by remember { mutableStateOf(false) }
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "Face Restoration Model",
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                        )
-                                        Box {
-                                            Button(
-                                                onClick = { showRestoreModelDropdown = true },
-                                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                                            ) {
-                                                Text(genFaceSwapRestoreModel.uppercase())
-                                            }
-                                            DropdownMenu(
-                                                expanded = showRestoreModelDropdown,
-                                                onDismissRequest = { showRestoreModelDropdown = false }
-                                            ) {
-                                                DropdownMenuItem(
-                                                    text = { Text("CODEFORMER") },
-                                                    onClick = {
-                                                        viewModel.updateGenFaceSwapRestoreModel("codeformer")
-                                                        showRestoreModelDropdown = false
-                                                    }
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text("GFPGAN") },
-                                                    onClick = {
-                                                        viewModel.updateGenFaceSwapRestoreModel("gfpgan")
-                                                        showRestoreModelDropdown = false
-                                                    }
-                                                )
+                                    if (reactorLoading) {
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Text("Fetching ReActor configuration...", style = MaterialTheme.typography.bodySmall)
                                             }
                                         }
+                                    } else if (reactorError != null) {
+                                        Card(
+                                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                        ) {
+                                            Column(modifier = Modifier.padding(12.dp)) {
+                                                Text(
+                                                    text = reactorError ?: "ReActor error",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Button(
+                                                    onClick = { viewModel.fetchReActorOptions() },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                                ) {
+                                                    Text("Retry Connect", color = Color.White)
+                                                }
+                                            }
+                                        }
+                                    } else if (reactorNodeInfo != null && reactorNodeInfo!!.isAvailable) {
+                                        val info = reactorNodeInfo!!
+
+                                        // Swap Model Selector
+                                        var showSwapMenu by remember { mutableStateOf(false) }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Swap Model",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                            )
+                                            Box {
+                                                Button(
+                                                    onClick = { showSwapMenu = true },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                                                ) {
+                                                    Text(selectedSwapModel)
+                                                }
+                                                DropdownMenu(
+                                                    expanded = showSwapMenu,
+                                                    onDismissRequest = { showSwapMenu = false }
+                                                ) {
+                                                    info.swapModels.forEach { opt ->
+                                                        DropdownMenuItem(
+                                                            text = { Text(opt) },
+                                                            onClick = {
+                                                                viewModel.updateReactorSelectedSwapModel(opt)
+                                                                showSwapMenu = false
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // Face Detection Selector
+                                        var showDetectMenu by remember { mutableStateOf(false) }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Face Detection",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                            )
+                                            Box {
+                                                Button(
+                                                    onClick = { showDetectMenu = true },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                                                ) {
+                                                    Text(selectedDetect)
+                                                }
+                                                DropdownMenu(
+                                                    expanded = showDetectMenu,
+                                                    onDismissRequest = { showDetectMenu = false }
+                                                ) {
+                                                    info.faceDetections.forEach { opt ->
+                                                        DropdownMenuItem(
+                                                            text = { Text(opt) },
+                                                            onClick = {
+                                                                viewModel.updateReactorSelectedFaceDetection(opt)
+                                                                showDetectMenu = false
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // Restore Model Selector
+                                        var showRestoreModelDropdown by remember { mutableStateOf(false) }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Face Restoration Model",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                            )
+                                            Box {
+                                                Button(
+                                                    onClick = { showRestoreModelDropdown = true },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                                                ) {
+                                                    Text(viewModel.getFriendlyRestoreModelName(selectedFaceRestore).uppercase())
+                                                }
+                                                DropdownMenu(
+                                                    expanded = showRestoreModelDropdown,
+                                                    onDismissRequest = { showRestoreModelDropdown = false }
+                                                ) {
+                                                    info.faceRestoreModels.forEach { opt ->
+                                                        DropdownMenuItem(
+                                                            text = { Text(viewModel.getFriendlyRestoreModelName(opt)) },
+                                                            onClick = {
+                                                                viewModel.updateReactorSelectedRestoreModel(opt)
+                                                                showRestoreModelDropdown = false
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // Face Restore Visibility Slider
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = "Face Restore Visibility",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                            )
+                                            Text(
+                                                text = String.format("%.2f", restoreVisibility),
+                                                color = MaterialTheme.colorScheme.primary,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                            )
+                                        }
+                                        Slider(
+                                            value = restoreVisibility,
+                                            onValueChange = { viewModel.updateReactorRestoreVisibility(it) },
+                                            valueRange = info.faceRestoreVisibilityMin..info.faceRestoreVisibilityMax,
+                                            colors = SliderDefaults.colors(
+                                                activeTrackColor = MaterialTheme.colorScheme.primary,
+                                                thumbColor = MaterialTheme.colorScheme.primary
+                                            )
+                                        )
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // Codeformer Weight Slider
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = "CodeFormer Weight",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                            )
+                                            Text(
+                                                text = String.format("%.2f", codeformerWeight),
+                                                color = MaterialTheme.colorScheme.primary,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                            )
+                                        }
+                                        Slider(
+                                            value = codeformerWeight,
+                                            onValueChange = { viewModel.updateReactorCodeformerWeight(it) },
+                                            valueRange = info.codeformerWeightMin..info.codeformerWeightMax,
+                                            colors = SliderDefaults.colors(
+                                                activeTrackColor = MaterialTheme.colorScheme.primary,
+                                                thumbColor = MaterialTheme.colorScheme.primary
+                                            )
+                                        )
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // Detect Gender Source Selector
+                                        var showGenSrcMenu by remember { mutableStateOf(false) }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Detect Gender Source",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                            )
+                                            Box {
+                                                Button(
+                                                    onClick = { showGenSrcMenu = true },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                                                ) {
+                                                    Text(selectedGenSource)
+                                                }
+                                                DropdownMenu(
+                                                    expanded = showGenSrcMenu,
+                                                    onDismissRequest = { showGenSrcMenu = false }
+                                                ) {
+                                                    info.detectGenderSources.forEach { opt ->
+                                                        DropdownMenuItem(
+                                                            text = { Text(opt) },
+                                                            onClick = {
+                                                                viewModel.updateReactorSelectedGenderSource(opt)
+                                                                showGenSrcMenu = false
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // Detect Gender Input Selector
+                                        var showGenInputMenu by remember { mutableStateOf(false) }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Detect Gender Input",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                            )
+                                            Box {
+                                                Button(
+                                                    onClick = { showGenInputMenu = true },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                                                ) {
+                                                    Text(selectedGenInput)
+                                                }
+                                                DropdownMenu(
+                                                    expanded = showGenInputMenu,
+                                                    onDismissRequest = { showGenInputMenu = false }
+                                                ) {
+                                                    info.detectGenderInputs.forEach { opt ->
+                                                        DropdownMenuItem(
+                                                            text = { Text(opt) },
+                                                            onClick = {
+                                                                viewModel.updateReactorSelectedGenderInput(opt)
+                                                                showGenInputMenu = false
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // Source Faces Index
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Source Faces Index",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            OutlinedTextField(
+                                                value = sourceFacesIndex,
+                                                onValueChange = { viewModel.updateReactorSourceFacesIndex(it) },
+                                                placeholder = { Text("0") },
+                                                modifier = Modifier.width(100.dp),
+                                                shape = RoundedCornerShape(10.dp),
+                                                singleLine = true
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // Input Faces Index
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Input Faces Index",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            OutlinedTextField(
+                                                value = inputFacesIndex,
+                                                onValueChange = { viewModel.updateReactorInputFacesIndex(it) },
+                                                placeholder = { Text("0") },
+                                                modifier = Modifier.width(100.dp),
+                                                shape = RoundedCornerShape(10.dp),
+                                                singleLine = true
+                                            )
+                                        }
+
+                                    } else {
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "ReActor extension not found on server. Please install ComfyUI-ReActor and restart ComfyUI.",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.error,
+                                                textAlign = TextAlign.Center
+                                            )
+                                        }
                                     }
-
-                                    Spacer(modifier = Modifier.height(12.dp))
-
-                                    // Face Restore Visibility Slider
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(
-                                            text = "Face Restore Visibility",
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                        )
-                                        Text(
-                                            text = String.format("%.2f", genFaceSwapVisibility),
-                                            color = MaterialTheme.colorScheme.primary,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
-                                        )
-                                    }
-                                    Slider(
-                                        value = genFaceSwapVisibility,
-                                        onValueChange = { viewModel.updateGenFaceSwapVisibility(it) },
-                                        valueRange = 0.0f..1.0f,
-                                        colors = SliderDefaults.colors(
-                                            activeTrackColor = MaterialTheme.colorScheme.primary,
-                                            thumbColor = MaterialTheme.colorScheme.primary
-                                        )
-                                    )
-
-                                    Spacer(modifier = Modifier.height(12.dp))
-
-                                    // Codeformer Weight Slider
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(
-                                            text = "CodeFormer Weight",
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                        )
-                                        Text(
-                                            text = String.format("%.2f", genFaceSwapWeight),
-                                            color = MaterialTheme.colorScheme.primary,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold)
-                                        )
-                                    }
-                                    Slider(
-                                        value = genFaceSwapWeight,
-                                        onValueChange = { viewModel.updateGenFaceSwapWeight(it) },
-                                        valueRange = 0.0f..1.0f,
-                                        colors = SliderDefaults.colors(
-                                            activeTrackColor = MaterialTheme.colorScheme.primary,
-                                            thumbColor = MaterialTheme.colorScheme.primary
-                                        )
-                                    )
                                 }
                             }
                         }

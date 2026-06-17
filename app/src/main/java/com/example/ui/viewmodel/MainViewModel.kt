@@ -16,6 +16,7 @@ import com.example.data.repository.ComfyRepository
 import com.example.data.settings.SettingsManager
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -67,6 +68,84 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val database = AppDatabase.getDatabase(context)
     val comfyClient = ComfyClient(settingsManager, viewModelScope)
     val repository = ComfyRepository(context, comfyClient, database, settingsManager, viewModelScope)
+
+    private var cachedObjectInfo: org.json.JSONObject? = null
+
+    private fun castValueToExpectedType(nodeType: String, fieldName: String, rawValue: Any?): Any? {
+        val info = cachedObjectInfo ?: return rawValue
+        val nodeObj = info.optJSONObject(nodeType) ?: return rawValue
+        val inputObj = nodeObj.optJSONObject("input") ?: return rawValue
+        val requiredObj = inputObj.optJSONObject("required")
+        val optionalObj = inputObj.optJSONObject("optional")
+        val fieldSpec = requiredObj?.optJSONArray(fieldName) ?: optionalObj?.optJSONArray(fieldName) ?: return rawValue
+
+        val typeIndicator = fieldSpec.opt(0)
+        if (typeIndicator is org.json.JSONArray) {
+            if (typeIndicator.length() > 0) {
+                val firstVal = typeIndicator.opt(0)
+                if (firstVal is Number) {
+                    val str = rawValue?.toString() ?: "0"
+                    val numVal = str.toDoubleOrNull() ?: 0.0
+                    return if (firstVal is Double || firstVal is Float) {
+                        numVal
+                    } else {
+                        numVal.toInt()
+                    }
+                } else {
+                    return rawValue?.toString()
+                }
+            }
+        } else if (typeIndicator is String) {
+            val typeStr = typeIndicator.uppercase()
+            val str = rawValue?.toString() ?: ""
+            if (typeStr == "INT" || typeStr == "INTEGER") {
+                return str.toDoubleOrNull()?.toInt() ?: 0
+            }
+            if (typeStr == "FLOAT" || typeStr == "NUMBER") {
+                return str.toDoubleOrNull() ?: 0.0
+            }
+            if (typeStr == "BOOLEAN" || typeStr == "BOOL") {
+                return str.lowercase() == "true" || str == "1"
+            }
+            if (typeStr == "STRING") {
+                return str
+            }
+        }
+        return rawValue
+    }
+
+    private fun sanitizeWorkflowTypes(workflow: org.json.JSONObject): org.json.JSONObject {
+        try {
+            val keys = workflow.keys()
+            while (keys.hasNext()) {
+                val nodeId = keys.next()
+                val nodeObj = workflow.optJSONObject(nodeId) ?: continue
+                val classType = nodeObj.optString("class_type") ?: continue
+                val inputsObj = nodeObj.optJSONObject("inputs") ?: continue
+
+                val inputKeys = inputsObj.keys()
+                val fieldsToUpdate = mutableListOf<Pair<String, Any?>>()
+                while (inputKeys.hasNext()) {
+                    val fieldName = inputKeys.next()
+                    val rawValue = inputsObj.opt(fieldName)
+                    if (rawValue is org.json.JSONArray) {
+                        continue
+                    }
+                    val castedValue = castValueToExpectedType(classType, fieldName, rawValue)
+                    if (castedValue != rawValue) {
+                        fieldsToUpdate.add(Pair(fieldName, castedValue))
+                    }
+                }
+
+                for ((field, value) in fieldsToUpdate) {
+                    inputsObj.put(field, value)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sanitizing workflow types", e)
+        }
+        return workflow
+    }
 
     // Dynamic assets cache states
     private val _assetsLoading = MutableStateFlow(false)
@@ -267,9 +346,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         settingsManager.genFaceSwapEnabled = enabled
     }
 
+    private val _genFaceSwapSourceFilename = MutableStateFlow<String?>(null)
+    val genFaceSwapSourceFilename = _genFaceSwapSourceFilename.asStateFlow()
+
+    private val _genFaceSwapSourceUploading = MutableStateFlow(false)
+    val genFaceSwapSourceUploading = _genFaceSwapSourceUploading.asStateFlow()
+
+    private val _genFaceSwapSourceUploadError = MutableStateFlow<String?>(null)
+    val genFaceSwapSourceUploadError = _genFaceSwapSourceUploadError.asStateFlow()
+
     fun updateGenFaceSwapSourceFaceUri(uri: Uri?) {
         _genFaceSwapSourceFaceUri.value = uri
         settingsManager.genFaceSwapSourceFaceUri = uri?.toString() ?: ""
+        if (uri != null) {
+            uploadGenFaceSwapSource(uri)
+        } else {
+            _genFaceSwapSourceFilename.value = null
+            _genFaceSwapSourceUploadError.value = null
+        }
+    }
+
+    fun uploadGenFaceSwapSource(uri: Uri) {
+        viewModelScope.launch {
+            _genFaceSwapSourceUploading.value = true
+            _genFaceSwapSourceUploadError.value = null
+            _genFaceSwapSourceFilename.value = null
+            val filename = repository.uploadImageToComfyUI(uri)
+            _genFaceSwapSourceUploading.value = false
+            if (filename != null) {
+                _genFaceSwapSourceFilename.value = filename
+            } else {
+                _genFaceSwapSourceUploadError.value = "Failed to upload face image to server"
+            }
+        }
     }
 
     fun updateGenFaceSwapRestoreModel(model: String) {
@@ -287,6 +396,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         settingsManager.genFaceSwapWeight = w
     }
 
+    // Dynamic ReActor fields & options
+    private val _reactorNodeInfo = MutableStateFlow<ReActorNodeInfo?>(null)
+    val reactorNodeInfo = _reactorNodeInfo.asStateFlow()
+
+    private val _reactorLoading = MutableStateFlow(false)
+    val reactorLoading = _reactorLoading.asStateFlow()
+
+    private val _reactorError = MutableStateFlow<String?>(null)
+    val reactorError = _reactorError.asStateFlow()
+
+    private val _reactorSelectedSwapModel = MutableStateFlow("inswapper_128.onnx")
+    val reactorSelectedSwapModel = _reactorSelectedSwapModel.asStateFlow()
+
+    private val _reactorSelectedFaceDetection = MutableStateFlow("retinaface_resnet50")
+    val reactorSelectedFaceDetection = _reactorSelectedFaceDetection.asStateFlow()
+
+    private val _reactorSelectedRestoreModel = MutableStateFlow("none")
+    val reactorSelectedRestoreModel = _reactorSelectedRestoreModel.asStateFlow()
+
+    private val _reactorSelectedGenderSource = MutableStateFlow("no")
+    val reactorSelectedGenderSource = _reactorSelectedGenderSource.asStateFlow()
+
+    private val _reactorSelectedGenderInput = MutableStateFlow("no")
+    val reactorSelectedGenderInput = _reactorSelectedGenderInput.asStateFlow()
+
+    private val _reactorRestoreVisibility = MutableStateFlow(1.0f)
+    val reactorRestoreVisibility = _reactorRestoreVisibility.asStateFlow()
+
+    private val _reactorCodeformerWeight = MutableStateFlow(0.5f)
+    val reactorCodeformerWeight = _reactorCodeformerWeight.asStateFlow()
+
+    private val _reactorSourceFacesIndex = MutableStateFlow("0")
+    val reactorSourceFacesIndex = _reactorSourceFacesIndex.asStateFlow()
+
+    private val _reactorInputFacesIndex = MutableStateFlow("0")
+    val reactorInputFacesIndex = _reactorInputFacesIndex.asStateFlow()
+
+    fun updateReactorSelectedSwapModel(value: String) { _reactorSelectedSwapModel.value = value }
+    fun updateReactorSelectedFaceDetection(value: String) { _reactorSelectedFaceDetection.value = value }
+    fun updateReactorSelectedRestoreModel(value: String) { _reactorSelectedRestoreModel.value = value }
+    fun updateReactorSelectedGenderSource(value: String) { _reactorSelectedGenderSource.value = value }
+    fun updateReactorSelectedGenderInput(value: String) { _reactorSelectedGenderInput.value = value }
+    fun updateReactorRestoreVisibility(value: Float) { _reactorRestoreVisibility.value = value }
+    fun updateReactorCodeformerWeight(value: Float) { _reactorCodeformerWeight.value = value }
+    fun updateReactorSourceFacesIndex(value: String) { _reactorSourceFacesIndex.value = value }
+    fun updateReactorInputFacesIndex(value: String) { _reactorInputFacesIndex.value = value }
+
+    fun getFriendlyRestoreModelName(rawName: String): String {
+        return when (rawName) {
+            "none" -> "None"
+            "codeformer-v0.1.0.pth" -> "CodeFormer"
+            "GFPGANv1.3.pth" -> "GFPGAN v1.3"
+            "GFPGANv1.4.pth" -> "GFPGAN v1.4"
+            "GPEN-BFR-512.onnx" -> "GPEN"
+            else -> rawName
+        }
+    }
+
     // Dedicated-tab Face Swap states (run locally / temporarily)
     private val _dediFaceSwapSourceUri = MutableStateFlow<Uri?>(null)
     val dediFaceSwapSourceUri = _dediFaceSwapSourceUri.asStateFlow()
@@ -294,12 +461,72 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _dediFaceSwapTargetUri = MutableStateFlow<Uri?>(null)
     val dediFaceSwapTargetUri = _dediFaceSwapTargetUri.asStateFlow()
 
+    private val _dediFaceSwapSourceFilename = MutableStateFlow<String?>(null)
+    val dediFaceSwapSourceFilename = _dediFaceSwapSourceFilename.asStateFlow()
+
+    private val _dediFaceSwapSourceUploading = MutableStateFlow(false)
+    val dediFaceSwapSourceUploading = _dediFaceSwapSourceUploading.asStateFlow()
+
+    private val _dediFaceSwapSourceUploadError = MutableStateFlow<String?>(null)
+    val dediFaceSwapSourceUploadError = _dediFaceSwapSourceUploadError.asStateFlow()
+
     fun updateDediFaceSwapSourceUri(uri: Uri?) {
         _dediFaceSwapSourceUri.value = uri
+        if (uri != null) {
+            uploadDediFaceSwapSource(uri)
+        } else {
+            _dediFaceSwapSourceFilename.value = null
+            _dediFaceSwapSourceUploadError.value = null
+        }
     }
+
+    fun uploadDediFaceSwapSource(uri: Uri) {
+        viewModelScope.launch {
+            _dediFaceSwapSourceUploading.value = true
+            _dediFaceSwapSourceUploadError.value = null
+            _dediFaceSwapSourceFilename.value = null
+            val filename = repository.uploadImageToComfyUI(uri)
+            _dediFaceSwapSourceUploading.value = false
+            if (filename != null) {
+                _dediFaceSwapSourceFilename.value = filename
+            } else {
+                _dediFaceSwapSourceUploadError.value = "Failed to upload source face image to server"
+            }
+        }
+    }
+
+    private val _dediFaceSwapTargetFilename = MutableStateFlow<String?>(null)
+    val dediFaceSwapTargetFilename = _dediFaceSwapTargetFilename.asStateFlow()
+
+    private val _dediFaceSwapTargetUploading = MutableStateFlow(false)
+    val dediFaceSwapTargetUploading = _dediFaceSwapTargetUploading.asStateFlow()
+
+    private val _dediFaceSwapTargetUploadError = MutableStateFlow<String?>(null)
+    val dediFaceSwapTargetUploadError = _dediFaceSwapTargetUploadError.asStateFlow()
 
     fun updateDediFaceSwapTargetUri(uri: Uri?) {
         _dediFaceSwapTargetUri.value = uri
+        if (uri != null) {
+            uploadDediFaceSwapTarget(uri)
+        } else {
+            _dediFaceSwapTargetFilename.value = null
+            _dediFaceSwapTargetUploadError.value = null
+        }
+    }
+
+    fun uploadDediFaceSwapTarget(uri: Uri) {
+        viewModelScope.launch {
+            _dediFaceSwapTargetUploading.value = true
+            _dediFaceSwapTargetUploadError.value = null
+            _dediFaceSwapTargetFilename.value = null
+            val filename = repository.uploadImageToComfyUI(uri)
+            _dediFaceSwapTargetUploading.value = false
+            if (filename != null) {
+                _dediFaceSwapTargetFilename.value = filename
+            } else {
+                _dediFaceSwapTargetUploadError.value = "Failed to upload target image to server"
+            }
+        }
     }
 
     // Dedicated Tab - FaceFusion configurations
@@ -329,6 +556,179 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateFaceFusionQuality(q: Int) {
         _facefusionQuality.value = q
+    }
+
+    // Dedicated Face Swap state tracking
+    private val _isSwapping = MutableStateFlow(false)
+    val isSwapping = _isSwapping.asStateFlow()
+
+    private val _swapResultImage = MutableStateFlow<GeneratedImage?>(null)
+    val swapResultImage = _swapResultImage.asStateFlow()
+
+    private val _swapError = MutableStateFlow<String?>(null)
+    val swapError = _swapError.asStateFlow()
+
+    fun clearSwapResult() {
+        _swapResultImage.value = null
+        _swapError.value = null
+    }
+
+    fun executeDedicatedFaceSwap(context: Context) {
+        val sourceUri = _dediFaceSwapSourceUri.value
+        val targetUri = _dediFaceSwapTargetUri.value
+        if (sourceUri == null || targetUri == null) {
+            _swapError.value = "Source and Target images must both be selected."
+            return
+        }
+
+        viewModelScope.launch {
+            _isSwapping.value = true
+            _swapError.value = null
+            _swapResultImage.value = null
+
+            val engine = settingsManager.faceSwapEngine
+            try {
+                if (engine == "facefusion") {
+                    // Execute using our custom FaceFusion REST API
+                    val resultBytes = repository.executeFaceFusionSwap(sourceUri, targetUri)
+                    if (resultBytes != null) {
+                        val savedImage = repository.saveSwappedImage(
+                            fileBytes = resultBytes,
+                            engine = "FaceFusion",
+                            sourceUri = sourceUri,
+                            targetUri = targetUri
+                        )
+                        _swapResultImage.value = savedImage
+                    } else {
+                        _swapError.value = "FaceFusion server error. Please ensure external FaceFusion REST API is running and configured correctly in Settings."
+                    }
+                } else {
+                    // ReActor node execution
+                    var sourceFilename = _dediFaceSwapSourceFilename.value
+                    if (sourceFilename == null) {
+                        sourceFilename = repository.uploadImageToComfyUI(sourceUri)
+                        if (sourceFilename == null) {
+                            _swapError.value = "Failed to upload source face image to ComfyUI server."
+                            _isSwapping.value = false
+                            return@launch
+                        }
+                        _dediFaceSwapSourceFilename.value = sourceFilename
+                    }
+
+                    var targetFilename = _dediFaceSwapTargetFilename.value
+                    if (targetFilename == null) {
+                        targetFilename = repository.uploadImageToComfyUI(targetUri)
+                        if (targetFilename == null) {
+                            _swapError.value = "Failed to upload target image to ComfyUI server."
+                            _isSwapping.value = false
+                            return@launch
+                        }
+                        _dediFaceSwapTargetFilename.value = targetFilename
+                    }
+
+                    // Dynamically validate and update options if missing
+                    try {
+                        validateReActorAndPrepare()
+                    } catch (e: Exception) {
+                        _swapError.value = e.message ?: "Validation failed"
+                        _isSwapping.value = false
+                        return@launch
+                    }
+
+                    // Build ComfyUI workflow JSON
+                    val flowObj = org.json.JSONObject()
+
+                    // Load Source Image Node
+                    val node100 = org.json.JSONObject()
+                    val inputs100 = org.json.JSONObject()
+                    inputs100.put("image", sourceFilename)
+                    node100.put("inputs", inputs100)
+                    node100.put("class_type", "LoadImage")
+                    flowObj.put("100", node100)
+
+                    // Load Target Image Node
+                    val node101 = org.json.JSONObject()
+                    val inputs101 = org.json.JSONObject()
+                    inputs101.put("image", targetFilename)
+                    node101.put("inputs", inputs101)
+                    node101.put("class_type", "LoadImage")
+                    flowObj.put("101", node101)
+
+                    // ReActor Load Face Model Node
+                    val node2 = org.json.JSONObject()
+                    val inputs2 = org.json.JSONObject()
+                    inputs2.put("face_model", _reactorSelectedSwapModel.value)
+                    node2.put("inputs", inputs2)
+                    node2.put("class_type", "ReActorLoadFaceModel")
+                    flowObj.put("2", node2)
+
+                    // ReActor Face Swap Node
+                    val node3 = org.json.JSONObject()
+                    val inputs3 = org.json.JSONObject()
+                    inputs3.put("enabled", true)
+                    inputs3.put("input_image", org.json.JSONArray().apply { put("101"); put(0) })
+                    inputs3.put("source_image", org.json.JSONArray().apply { put("100"); put(0) })
+                    inputs3.put("swap_model", _reactorSelectedSwapModel.value)
+                    inputs3.put("facedetection", _reactorSelectedFaceDetection.value)
+                    inputs3.put("face_restore_model", _reactorSelectedRestoreModel.value)
+                    inputs3.put("face_restore_visibility", _reactorRestoreVisibility.value.toDouble())
+                    inputs3.put("codeformer_weight", _reactorCodeformerWeight.value.toDouble())
+                    inputs3.put("detect_gender_source", _reactorSelectedGenderSource.value)
+                    inputs3.put("detect_gender_input", _reactorSelectedGenderInput.value)
+                    inputs3.put("source_faces_index", _reactorSourceFacesIndex.value)
+                    inputs3.put("input_faces_index", _reactorInputFacesIndex.value)
+                    inputs3.put("console_log_level", (_reactorNodeInfo.value?.consoleLogLevelDefault ?: "1").toIntOrNull() ?: 1)
+                    node3.put("inputs", inputs3)
+                    node3.put("class_type", "ReActorFaceSwap")
+                    flowObj.put("3", node3)
+
+                    // Save Image Node
+                    val node4 = org.json.JSONObject()
+                    val inputs4 = org.json.JSONObject()
+                    inputs4.put("images", org.json.JSONArray().apply { put("3"); put(0) })
+                    inputs4.put("filename_prefix", "ComfyPad_FaceSwap")
+                    node4.put("inputs", inputs4)
+                    node4.put("class_type", "SaveImage")
+                    flowObj.put("4", node4)
+
+                    // Queue prompt and listen
+                    val promptId = comfyClient.queuePrompt(sanitizeWorkflowTypes(flowObj).toString())
+                    if (promptId != null) {
+                        var checkAttempts = 0
+                        var matchedImage: GeneratedImage? = null
+                        while (checkAttempts < 60) {
+                            delay(2000)
+                            val latest = repository.lastGeneratedImage.value
+                            if (latest != null && latest.originalImageRef == targetFilename) {
+                                matchedImage = latest
+                                break
+                            }
+                            if (comfyClient.generationStatus.value == com.example.data.network.GenerationStatus.SUCCESS && latest != null) {
+                                matchedImage = latest
+                                break
+                            }
+                            if (comfyClient.generationStatus.value == com.example.data.network.GenerationStatus.ERROR) {
+                                _swapError.value = "ReActor workflow execution failed in ComfyUI."
+                                break
+                            }
+                            checkAttempts++
+                        }
+
+                        if (matchedImage != null) {
+                            _swapResultImage.value = matchedImage
+                        } else if (_swapError.value == null) {
+                            _swapError.value = "Face Swap execution timed out or failed on the ComfyUI server."
+                        }
+                    } else {
+                        _swapError.value = "Failed to queue execution on the ComfyUI server. Ensure stable connection."
+                    }
+                }
+            } catch (e: Exception) {
+                _swapError.value = "Execution failed: ${e.message}"
+            } finally {
+                _isSwapping.value = false
+            }
+        }
     }
 
     private val _selectedGalleryImages = MutableStateFlow<Set<GeneratedImage>>(emptySet())
@@ -463,6 +863,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+
+        // Trigger initial source face upload if saved URI is present
+        val initialUri = if (settingsManager.genFaceSwapSourceFaceUri.isNotEmpty()) Uri.parse(settingsManager.genFaceSwapSourceFaceUri) else null
+        if (initialUri != null) {
+            uploadGenFaceSwapSource(initialUri)
+        }
     }
 
     fun setServerConfig(ip: String, port: Int) {
@@ -580,6 +986,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _assetsLoading.value = false
                     return@launch
                 }
+                cachedObjectInfo = info
+                
+                // Fetch ReActor options using the loaded info to avoid extra server roundtrips
+                fetchReActorOptions(info)
+
                 val embeds = comfyClient.getEmbeddings()
 
                 val ckpts = extractOptions(info, "CheckpointLoaderSimple", "ckpt_name").ifEmpty {
@@ -641,6 +1052,221 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _assetsLoading.value = false
             }
         }
+    }
+
+    fun fetchReActorOptions(providedObjectInfo: org.json.JSONObject? = null) {
+        viewModelScope.launch {
+            _reactorLoading.value = true
+            _reactorError.value = null
+            try {
+                val objectInfo = providedObjectInfo ?: comfyClient.getObjectInfo()
+                if (objectInfo == null) {
+                    _reactorError.value = "Failed to connect to server and fetch object info."
+                    _reactorNodeInfo.value = ReActorNodeInfo(isAvailable = false)
+                    // Disable face swap toggle if reactor engine selected
+                    if (settingsManager.faceSwapEngine == "reactor") {
+                        _genFaceSwapEnabled.value = false
+                        settingsManager.genFaceSwapEnabled = false
+                    }
+                    return@launch
+                }
+                cachedObjectInfo = objectInfo
+
+                if (!objectInfo.has("ReActorFaceSwap")) {
+                    _reactorError.value = "ReActor extension not found on server. Please install ComfyUI-ReActor and restart ComfyUI."
+                    _reactorNodeInfo.value = ReActorNodeInfo(isAvailable = false)
+                    if (settingsManager.faceSwapEngine == "reactor") {
+                        _genFaceSwapEnabled.value = false
+                        settingsManager.genFaceSwapEnabled = false
+                    }
+                    return@launch
+                }
+
+                val reactorNodeObj = objectInfo.getJSONObject("ReActorFaceSwap")
+                val inputObj = reactorNodeObj.optJSONObject("input")
+                val requiredObj = inputObj?.optJSONObject("required")
+
+                if (requiredObj == null) {
+                    _reactorError.value = "ReActor input format is unexpected/invalid."
+                    _reactorNodeInfo.value = ReActorNodeInfo(isAvailable = false)
+                    return@launch
+                }
+
+                val swapModels = jsonArrayToStringList(requiredObj.optJSONArray("swap_model"))
+                val facedetections = jsonArrayToStringList(requiredObj.optJSONArray("facedetection"))
+                val faceRestoreModels = jsonArrayToStringList(requiredObj.optJSONArray("face_restore_model"))
+                val detectGenderSources = jsonArrayToStringList(requiredObj.optJSONArray("detect_gender_source"))
+                val detectGenderInputs = jsonArrayToStringList(requiredObj.optJSONArray("detect_gender_input"))
+
+                // Numeric slider attributes (face_restore_visibility)
+                val visibilityMeta = requiredObj.optJSONArray("face_restore_visibility")
+                val visMin = getNestedNumeric(visibilityMeta, "min", 0.0f)
+                val visMax = getNestedNumeric(visibilityMeta, "max", 1.0f)
+                val visDef = getNestedNumeric(visibilityMeta, "default", 1.0f)
+
+                // Numeric slider attributes (codeformer_weight)
+                val cfMeta = requiredObj.optJSONArray("codeformer_weight")
+                val cfMin = getNestedNumeric(cfMeta, "min", 0.0f)
+                val cfMax = getNestedNumeric(cfMeta, "max", 1.0f)
+                val cfDef = getNestedNumeric(cfMeta, "default", 0.5f)
+
+                val logLevels = jsonArrayToStringList(requiredObj.optJSONArray("console_log_level"))
+                val consoleLogLevelDefault = logLevels.firstOrNull() ?: "1"
+
+                val info = ReActorNodeInfo(
+                    isAvailable = true,
+                    swapModels = swapModels,
+                    faceDetections = facedetections,
+                    faceRestoreModels = faceRestoreModels,
+                    detectGenderSources = detectGenderSources,
+                    detectGenderInputs = detectGenderInputs,
+                    faceRestoreVisibilityMin = visMin,
+                    faceRestoreVisibilityMax = visMax,
+                    faceRestoreVisibilityDefault = visDef,
+                    codeformerWeightMin = cfMin,
+                    codeformerWeightMax = cfMax,
+                    codeformerWeightDefault = cfDef,
+                    consoleLogLevelDefault = consoleLogLevelDefault,
+                    swapModelDefault = swapModels.firstOrNull() ?: "",
+                    facedetectionDefault = facedetections.firstOrNull() ?: "",
+                    faceRestoreModelDefault = faceRestoreModels.firstOrNull() ?: "",
+                    detectGenderSourceDefault = detectGenderSources.firstOrNull() ?: "",
+                    detectGenderInputDefault = detectGenderInputs.firstOrNull() ?: ""
+                )
+
+                _reactorNodeInfo.value = info
+                _reactorError.value = null
+
+                // Fallbacks: populate state flows with defaults if currently unselected or invalid
+                if (!_reactorSelectedSwapModel.value.let { swapModels.contains(it) }) {
+                    _reactorSelectedSwapModel.value = info.swapModelDefault
+                }
+                if (!_reactorSelectedFaceDetection.value.let { facedetections.contains(it) }) {
+                    _reactorSelectedFaceDetection.value = info.facedetectionDefault
+                }
+                if (!_reactorSelectedRestoreModel.value.let { faceRestoreModels.contains(it) }) {
+                    _reactorSelectedRestoreModel.value = info.faceRestoreModelDefault
+                }
+                if (!_reactorSelectedGenderSource.value.let { detectGenderSources.contains(it) }) {
+                    _reactorSelectedGenderSource.value = info.detectGenderSourceDefault
+                }
+                if (!_reactorSelectedGenderInput.value.let { detectGenderInputs.contains(it) }) {
+                    _reactorSelectedGenderInput.value = info.detectGenderInputDefault
+                }
+
+                // If user sliders are out of bounds
+                if (_reactorRestoreVisibility.value < visMin || _reactorRestoreVisibility.value > visMax) {
+                    _reactorRestoreVisibility.value = visDef
+                }
+                if (_reactorCodeformerWeight.value < cfMin || _reactorCodeformerWeight.value > cfMax) {
+                    _reactorCodeformerWeight.value = cfDef
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Uncaught error parsing ReActor options from /object_info", e)
+                _reactorError.value = "Error parsing server ReActor options: ${e.message}"
+                _reactorNodeInfo.value = ReActorNodeInfo(isAvailable = false)
+            } finally {
+                _reactorLoading.value = false
+            }
+        }
+    }
+
+    private suspend fun validateReActorAndPrepare(): Boolean {
+        // Ensure ReActor options are loaded
+        var options = _reactorNodeInfo.value
+        if (options == null || !options.isAvailable) {
+            val fetchedInfo = comfyClient.getObjectInfo()
+            if (fetchedInfo != null) {
+                cachedObjectInfo = fetchedInfo
+                fetchReActorOptions(fetchedInfo)
+            }
+            options = _reactorNodeInfo.value
+        }
+
+        if (options == null || !options.isAvailable) {
+            throw IllegalStateException("ReActor extension not found on server. Please install ComfyUI-ReActor and restart ComfyUI.")
+        }
+
+        var needsRefetch = false
+
+        val currentSwap = _reactorSelectedSwapModel.value
+        val currentDetect = _reactorSelectedFaceDetection.value
+        val currentRestore = _reactorSelectedRestoreModel.value
+        val currentGenSrc = _reactorSelectedGenderSource.value
+        val currentGenIn = _reactorSelectedGenderInput.value
+
+        if (!options.swapModels.contains(currentSwap)) {
+            Log.w(TAG, "Selected swap model '$currentSwap' not in options.")
+            needsRefetch = true
+        }
+        if (!options.faceDetections.contains(currentDetect)) {
+            Log.w(TAG, "Selected face detection '$currentDetect' not in options.")
+            needsRefetch = true
+        }
+        if (!options.faceRestoreModels.contains(currentRestore)) {
+            Log.w(TAG, "Selected face restore model '$currentRestore' not in options.")
+            needsRefetch = true
+        }
+        if (!options.detectGenderSources.contains(currentGenSrc)) {
+            Log.w(TAG, "Selected gender detection source '$currentGenSrc' not in options.")
+            needsRefetch = true
+        }
+        if (!options.detectGenderInputs.contains(currentGenIn)) {
+            Log.w(TAG, "Selected gender detection input '$currentGenIn' not in options.")
+            needsRefetch = true
+        }
+
+        if (needsRefetch) {
+            Log.i(TAG, "Some selected ReActor values are missing from cache. Re-fetching /object_info...")
+            val fetchedInfo = comfyClient.getObjectInfo()
+            if (fetchedInfo != null) {
+                cachedObjectInfo = fetchedInfo
+                fetchReActorOptions(fetchedInfo)
+            }
+            val updatedOptions = _reactorNodeInfo.value ?: return false
+
+            if (!updatedOptions.swapModels.contains(_reactorSelectedSwapModel.value)) {
+                _reactorSelectedSwapModel.value = updatedOptions.swapModelDefault
+            }
+            if (!updatedOptions.faceDetections.contains(_reactorSelectedFaceDetection.value)) {
+                _reactorSelectedFaceDetection.value = updatedOptions.facedetectionDefault
+            }
+            if (!updatedOptions.faceRestoreModels.contains(_reactorSelectedRestoreModel.value)) {
+                _reactorSelectedRestoreModel.value = updatedOptions.faceRestoreModelDefault
+            }
+            if (!updatedOptions.detectGenderSources.contains(_reactorSelectedGenderSource.value)) {
+                _reactorSelectedGenderSource.value = updatedOptions.detectGenderSourceDefault
+            }
+            if (!updatedOptions.detectGenderInputs.contains(_reactorSelectedGenderInput.value)) {
+                _reactorSelectedGenderInput.value = updatedOptions.detectGenderInputDefault
+            }
+        }
+
+        return true
+    }
+
+    private fun jsonArrayToStringList(arr: org.json.JSONArray?): List<String> {
+        if (arr == null) return emptyList()
+        val list = mutableListOf<String>()
+        val firstVal = arr.opt(0)
+        if (firstVal is org.json.JSONArray) {
+            for (i in 0 until firstVal.length()) {
+                list.add(firstVal.optString(i))
+            }
+        } else if (firstVal is String) {
+            list.add(firstVal)
+        }
+        return list
+    }
+
+    private fun getNestedNumeric(arr: org.json.JSONArray?, key: String, fallback: Float): Float {
+        if (arr == null || arr.length() < 2) return fallback
+        val secondVal = arr.optJSONObject(1) ?: return fallback
+        if (secondVal.has(key)) {
+            return secondVal.optDouble(key, fallback.toDouble()).toFloat()
+        }
+        return fallback
     }
 
     fun updateSelectedCheckpoint(ckpt: String?) {
@@ -817,6 +1443,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val root = org.json.JSONObject()
         val ckptName = _selectedCheckpoint.value ?: "v1-5-pruned-emaonly.safetensors"
         val mType = modelType.value
+        val faceSwapActive = _genFaceSwapEnabled.value
+        val savePrefix = if (faceSwapActive) "ComfyPad_FaceSwap" else "ComfyPad_Original"
 
         if (mType == ModelType.FLUX) {
             // FLUX PIPELINE
@@ -968,7 +1596,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val saveNode = org.json.JSONObject()
             val saveInputs = org.json.JSONObject()
             saveInputs.put("images", org.json.JSONArray().apply { put("12"); put(0) })
-            saveInputs.put("filename_prefix", "ComfyPad_Flux")
+            saveInputs.put("filename_prefix", savePrefix)
             saveNode.put("inputs", saveInputs)
             saveNode.put("class_type", "SaveImage")
             root.put("13", saveNode)
@@ -1095,7 +1723,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // SaveImage
                 val saveNode = org.json.JSONObject()
                 val saveInputs = org.json.JSONObject()
-                saveInputs.put("filename_prefix", "ComfyPad")
+                saveInputs.put("filename_prefix", savePrefix)
                 saveInputs.put("images", org.json.JSONArray().apply { put("8"); put(0) })
                 saveNode.put("inputs", saveInputs)
                 saveNode.put("class_type", "SaveImage")
@@ -1145,7 +1773,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // SaveImage (hires)
                 val saveHiresNode = org.json.JSONObject()
                 val saveHiresInputs = org.json.JSONObject()
-                saveHiresInputs.put("filename_prefix", "ComfyPad")
+                saveHiresInputs.put("filename_prefix", savePrefix)
                 saveHiresInputs.put("images", org.json.JSONArray().apply { put("22"); put(0) })
                 saveHiresNode.put("inputs", saveHiresInputs)
                 saveHiresNode.put("class_type", "SaveImage")
@@ -1154,19 +1782,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // Intercept workflow to append ReActor nodes when Face Swap toggled ON and ReActor engine is designated.
-        val faceSwapActive = _genFaceSwapEnabled.value
         val reactorSelected = settingsManager.faceSwapEngine == "reactor"
         if (faceSwapActive && reactorSelected) {
-            val sourceFaceUri = _genFaceSwapSourceFaceUri.value
-            val base64Face = if (sourceFaceUri != null) uriToBase64(context, sourceFaceUri) else null
-            if (base64Face != null) {
+            val sourceFilename = _genFaceSwapSourceFilename.value
+            if (sourceFilename != null) {
                 val decodeNodeId = if (mType == ModelType.FLUX) "12" else if (_hiresEnabled.value) "22" else "8"
                 val saveNodeId = if (mType == ModelType.FLUX) "13" else if (_hiresEnabled.value) "23" else "9"
+
+                // Node 199: LoadImage Node for sourceFace
+                val loadImageNode = org.json.JSONObject()
+                val loadImageInputs = org.json.JSONObject()
+                loadImageInputs.put("image", sourceFilename)
+                loadImageNode.put("inputs", loadImageInputs)
+                loadImageNode.put("class_type", "LoadImage")
+                root.put("199", loadImageNode)
 
                 // Node 200: ReActorLoadFaceModel
                 val loadFaceNode = org.json.JSONObject()
                 val loadFaceInputs = org.json.JSONObject()
-                loadFaceInputs.put("face_model", "inswapper_128.onnx")
+                loadFaceInputs.put("face_model", _reactorSelectedSwapModel.value)
                 loadFaceNode.put("inputs", loadFaceInputs)
                 loadFaceNode.put("class_type", "ReActorLoadFaceModel")
                 root.put("200", loadFaceNode)
@@ -1176,15 +1810,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val swapInputs = org.json.JSONObject()
                 swapInputs.put("enabled", true)
                 swapInputs.put("input_image", org.json.JSONArray().apply { put(decodeNodeId); put(0) })
-                swapInputs.put("source_image", base64Face)
-                swapInputs.put("face_restore_model", _genFaceSwapRestoreModel.value)
-                swapInputs.put("face_restore_visibility", _genFaceSwapVisibility.value.toDouble())
-                swapInputs.put("codeformer_weight", _genFaceSwapWeight.value.toDouble())
-                swapInputs.put("detect_gender_source", "no")
-                swapInputs.put("detect_gender_input", "no")
-                swapInputs.put("source_faces_index", "0")
-                swapInputs.put("input_faces_index", "0")
-                swapInputs.put("console_log_level", 1)
+                swapInputs.put("source_image", org.json.JSONArray().apply { put("199"); put(0) })
+                swapInputs.put("swap_model", _reactorSelectedSwapModel.value)
+                swapInputs.put("facedetection", _reactorSelectedFaceDetection.value)
+                swapInputs.put("face_restore_model", _reactorSelectedRestoreModel.value)
+                swapInputs.put("face_restore_visibility", _reactorRestoreVisibility.value.toDouble())
+                swapInputs.put("codeformer_weight", _reactorCodeformerWeight.value.toDouble())
+                swapInputs.put("detect_gender_source", _reactorSelectedGenderSource.value)
+                swapInputs.put("detect_gender_input", _reactorSelectedGenderInput.value)
+                swapInputs.put("source_faces_index", _reactorSourceFacesIndex.value)
+                swapInputs.put("input_faces_index", _reactorInputFacesIndex.value)
+                swapInputs.put("console_log_level", (_reactorNodeInfo.value?.consoleLogLevelDefault ?: "1").toIntOrNull() ?: 1)
                 swapNode.put("inputs", swapInputs)
                 swapNode.put("class_type", "ReActorFaceSwap")
                 root.put("201", swapNode)
@@ -1200,7 +1836,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        return root.toString()
+        return sanitizeWorkflowTypes(root).toString()
     }
 
     // Setters
@@ -1236,6 +1872,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Generation Trigger
     fun triggerGeneration() {
         viewModelScope.launch {
+            val faceSwapActive = _genFaceSwapEnabled.value
+            val reactorSelected = settingsManager.faceSwapEngine == "reactor"
+            if (faceSwapActive && reactorSelected) {
+                val sourceFaceUri = _genFaceSwapSourceFaceUri.value
+                if (sourceFaceUri == null) {
+                    repository.setGenerationError("Source face photo is required for Face Swap.")
+                    return@launch
+                }
+                var filename = _genFaceSwapSourceFilename.value
+                if (filename == null) {
+                    filename = repository.uploadImageToComfyUI(sourceFaceUri)
+                    if (filename == null) {
+                        repository.setGenerationError("Failed to upload face image to server. Check network connection.")
+                        return@launch
+                    }
+                    _genFaceSwapSourceFilename.value = filename
+                }
+                try {
+                    validateReActorAndPrepare()
+                } catch (e: Exception) {
+                    repository.setGenerationError(e.message ?: "ReActor validation failed.")
+                    return@launch
+                }
+            }
+
             val finalSeed = if (_isSeedRandom.value) {
                 (0..Long.MAX_VALUE).random()
             } else {
@@ -1259,7 +1920,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            comfyClient.queuePrompt(finalJson)
+            val sanitizedJson = try {
+                sanitizeWorkflowTypes(org.json.JSONObject(finalJson)).toString()
+            } catch (e: Exception) {
+                finalJson
+            }
+
+            comfyClient.queuePrompt(sanitizedJson)
         }
     }
 
@@ -1497,3 +2164,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repository.clearCache()
     }
 }
+
+data class ReActorNodeInfo(
+    val isAvailable: Boolean = false,
+    val swapModels: List<String> = emptyList(),
+    val faceDetections: List<String> = emptyList(),
+    val faceRestoreModels: List<String> = emptyList(),
+    val detectGenderSources: List<String> = emptyList(),
+    val detectGenderInputs: List<String> = emptyList(),
+    val faceRestoreVisibilityMin: Float = 0f,
+    val faceRestoreVisibilityMax: Float = 1f,
+    val faceRestoreVisibilityDefault: Float = 1f,
+    val codeformerWeightMin: Float = 0f,
+    val codeformerWeightMax: Float = 1f,
+    val codeformerWeightDefault: Float = 0.5f,
+    val consoleLogLevelDefault: String = "1",
+    val swapModelDefault: String = "",
+    val facedetectionDefault: String = "",
+    val faceRestoreModelDefault: String = "",
+    val detectGenderSourceDefault: String = "",
+    val detectGenderInputDefault: String = ""
+)

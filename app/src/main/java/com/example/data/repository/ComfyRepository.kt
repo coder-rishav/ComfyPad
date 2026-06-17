@@ -46,6 +46,10 @@ class ComfyRepository(
     private val _generationError = MutableStateFlow<String?>(null)
     val generationError = _generationError.asStateFlow()
 
+    fun setGenerationError(err: String?) {
+        _generationError.value = err
+    }
+
     init {
         // Observe comfyClient's generation state to automatically download the result image when successful
         comfyClient.generationStatus
@@ -78,6 +82,8 @@ class ComfyRepository(
                     _generationError.value = "Failed to fetch generation history from ComfyUI."
                     return@launch
                 }
+
+                Log.d("ComfyPad", "History response: ${historyObj.toString()}")
 
                 val jobDetail = historyObj.getJSONObject(promptId)
                 val outputs = jobDetail.optJSONObject("outputs") ?: return@launch
@@ -188,7 +194,7 @@ class ComfyRepository(
         val sampler: String = "euler"
     )
 
-    private suspend fun executeFaceFusionSwap(
+    suspend fun executeFaceFusionSwap(
         sourceUri: Uri,
         targetUri: Uri
     ): ByteArray? = withContext(Dispatchers.IO) {
@@ -332,6 +338,7 @@ class ComfyRepository(
         seed: Long,
         sampler: String
     ) = withContext(Dispatchers.IO) {
+        Log.d("ComfyPad", "Loading/view API parameters - filename: $filename, subfolder: $subfolder, type: $type")
         val stream = comfyClient.getImageViewStream(filename, subfolder, type)
         if (stream == null) {
             Log.e(TAG, "Failed to get image stream from ComfyUI.")
@@ -340,6 +347,17 @@ class ComfyRepository(
 
         val fileBytes = stream.readBytes()
         stream.close()
+
+        Log.d("ComfyPad", "Image bytes received: ${fileBytes.size}")
+        if (fileBytes.isEmpty()) {
+            Log.e("ComfyPad", "Error: Image bytes received are empty!")
+            return@withContext
+        }
+        if (fileBytes.size < 1000) {
+            val contentStr = if (fileBytes.size < 200) String(fileBytes, Charsets.UTF_8) else "..."
+            Log.e("ComfyPad", "Error: Image bytes received are too small (${fileBytes.size} bytes) - likely not a valid image! Server response text: $contentStr")
+            return@withContext
+        }
 
         var finalBytes = fileBytes
         var tagToStore: String? = null
@@ -388,6 +406,10 @@ class ComfyRepository(
         FileOutputStream(internalFile).use { fos ->
             fos.write(finalBytes)
         }
+
+        Log.d("ComfyPad", "Image saved to: ${internalFile.absolutePath}")
+        Log.d("ComfyPad", "File exists: ${internalFile.exists()}")
+        Log.d("ComfyPad", "File size: ${internalFile.length()}")
 
         var galleryUriStr: String? = null
 
@@ -526,6 +548,85 @@ class ComfyRepository(
             files?.forEach { file ->
                 file.delete()
             }
+        }
+    }
+
+    suspend fun saveSwappedImage(
+        fileBytes: ByteArray,
+        engine: String,
+        sourceUri: Uri?,
+        targetUri: Uri?
+    ): GeneratedImage = withContext(Dispatchers.IO) {
+        val appFolder = File(context.filesDir, "generated_images")
+        if (!appFolder.exists()) {
+            appFolder.mkdirs()
+        }
+
+        val uniqueFilename = "comfypad_swapped_${System.currentTimeMillis()}.png"
+        val internalFile = File(appFolder, uniqueFilename)
+        FileOutputStream(internalFile).use { fos ->
+            fos.write(fileBytes)
+        }
+
+        var galleryUriStr: String? = null
+        if (settingsManager.saveToGallery) {
+            galleryUriStr = saveToGallery(fileBytes, uniqueFilename)
+        }
+
+        val generatedImage = GeneratedImage(
+            fileName = uniqueFilename,
+            localPath = internalFile.absolutePath,
+            prompt = "Face Swap Result via $engine",
+            negativePrompt = "",
+            steps = 0,
+            cfg = 0f,
+            width = 512,
+            height = 512,
+            seed = 0L,
+            sampler = "none",
+            timestamp = System.currentTimeMillis(),
+            tag = "face_swap",
+            engineUsed = engine,
+            sourceFaceThumbnail = sourceUri?.toString(),
+            originalImageRef = targetUri?.toString()
+        )
+
+        val id = imageDao.insertImage(generatedImage)
+        generatedImage.copy(id = id.toInt())
+    }
+
+    suspend fun uploadImageToComfyUI(imageUri: Uri): String? = withContext(Dispatchers.IO) {
+        val client = okhttp3.OkHttpClient()
+        val bytes = try {
+            context.contentResolver.openInputStream(imageUri)?.use { it.readBytes() }
+        } catch (e: Exception) { null } ?: return@withContext null
+
+        val requestBody = okhttp3.MultipartBody.Builder()
+            .setType(okhttp3.MultipartBody.FORM)
+            .addFormDataPart(
+                "image",
+                "swap_target_${System.currentTimeMillis()}.png",
+                okhttp3.RequestBody.create("image/png".toMediaTypeOrNull(), bytes)
+            )
+            .build()
+
+        val request = okhttp3.Request.Builder()
+            .url("http://${settingsManager.serverIp}:${settingsManager.serverPort}/upload/image")
+            .post(requestBody)
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val bodyStr = response.body?.string() ?: ""
+                    JSONObject(bodyStr).getString("name")
+                } else {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed uploading target image to ComfyUI", e)
+            null
         }
     }
 

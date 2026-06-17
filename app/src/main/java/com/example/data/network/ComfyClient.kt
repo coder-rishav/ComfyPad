@@ -353,6 +353,7 @@ class ComfyClient(
     // Get input stream for file
     fun getImageViewStream(filename: String, subfolder: String = "", type: String = "output"): InputStream? {
         val baseHttpUrl = getBaseUrl().toHttpUrlOrNull()!!.newBuilder()
+            .addPathSegment("view")
             .addQueryParameter("filename", filename)
             .addQueryParameter("subfolder", subfolder)
             .addQueryParameter("type", type)

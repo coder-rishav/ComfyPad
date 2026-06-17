@@ -9,6 +9,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -17,6 +18,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import com.example.ui.screens.FaceSwapScreen
 import com.example.ui.screens.GalleryScreen
 import com.example.ui.screens.GenerateScreen
 import com.example.ui.screens.SettingsScreen
@@ -102,22 +104,30 @@ fun MainWorkspace(
                 NavigationBarItem(
                     selected = activeTab == 1,
                     onClick = { activeTab = 1 },
+                    icon = { Icon(Icons.Default.Face, contentDescription = "Face Swap") },
+                    label = { Text("Face Swap") },
+                    modifier = Modifier.testTag("nav_faceswap_tab")
+                )
+
+                NavigationBarItem(
+                    selected = activeTab == 2,
+                    onClick = { activeTab = 2 },
                     icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = "Gallery") },
                     label = { Text("Gallery") },
                     modifier = Modifier.testTag("nav_gallery_tab")
                 )
 
                 NavigationBarItem(
-                    selected = activeTab == 2,
-                    onClick = { activeTab = 2 },
+                    selected = activeTab == 3,
+                    onClick = { activeTab = 3 },
                     icon = { Icon(Icons.Default.Hub, contentDescription = "Workflows") },
                     label = { Text("Workflows") },
                     modifier = Modifier.testTag("nav_workflows_tab")
                 )
 
                 NavigationBarItem(
-                    selected = activeTab == 3,
-                    onClick = { activeTab = 3 },
+                    selected = activeTab == 4,
+                    onClick = { activeTab = 4 },
                     icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
                     label = { Text("Settings") },
                     modifier = Modifier.testTag("nav_settings_tab")
@@ -132,15 +142,16 @@ fun MainWorkspace(
         ) {
             when (activeTab) {
                 0 -> GenerateScreen(viewModel = viewModel)
-                1 -> GalleryScreen(
+                1 -> FaceSwapScreen(viewModel = viewModel)
+                2 -> GalleryScreen(
                     viewModel = viewModel,
                     onNavigateToGenerate = { activeTab = 0 }
                 )
-                2 -> WorkflowsScreen(
+                3 -> WorkflowsScreen(
                     viewModel = viewModel,
                     onWorkflowLoaded = { activeTab = 0 }
                 )
-                3 -> SettingsScreen(viewModel = viewModel)
+                4 -> SettingsScreen(viewModel = viewModel)
             }
         }
     }
